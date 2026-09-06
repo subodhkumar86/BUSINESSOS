@@ -11,6 +11,8 @@ import {
   createHash,
 } from 'node:crypto'
 import { promisify } from 'node:util'
+import { readFile } from 'node:fs/promises'
+import { extname, resolve, sep } from 'node:path'
 import { createClient } from 'redis'
 import { z } from 'zod'
 import type { PoolClient } from 'pg'
@@ -114,6 +116,7 @@ export async function createApp(config: {
   origins: string[]
   secure?: boolean
   prefix?: string
+  staticDir?: string
 }) {
   const store = new Store(config.databaseUrl),
     redis = createClient({
@@ -162,6 +165,54 @@ export async function createApp(config: {
         : {}),
     })
     res.end(content)
+  }
+  const staticRoot = config.staticDir ? resolve(config.staticDir) : undefined
+  const sendStatic = async (res: ServerResponse, pathname: string) => {
+    if (!staticRoot || pathname.startsWith('/api/')) return false
+    const relative = pathname === '/' ? 'index.html' : pathname.slice(1)
+    const candidate = resolve(staticRoot, relative)
+    if (candidate !== staticRoot && !candidate.startsWith(staticRoot + sep))
+      return false
+    const fallback = resolve(staticRoot, 'index.html')
+    try {
+      const file = await readFile(candidate)
+      const types: Record<string, string> = {
+        '.css': 'text/css; charset=utf-8',
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'text/javascript; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.ico': 'image/x-icon',
+        '.json': 'application/json; charset=utf-8',
+      }
+      res.writeHead(200, {
+        'Content-Type': types[extname(candidate)] || 'application/octet-stream',
+        'Cache-Control':
+          candidate === fallback
+            ? 'no-cache'
+            : 'public, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      res.end(file)
+      return true
+    } catch (error: unknown) {
+      if (
+        (error as NodeJS.ErrnoException).code !== 'ENOENT' ||
+        extname(candidate)
+      )
+        return false
+      try {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        res.end(await readFile(fallback))
+        return true
+      } catch {
+        return false
+      }
+    }
   }
   const publicUser = (r: User): User => ({
     id: r.id,
@@ -393,6 +444,7 @@ export async function createApp(config: {
           sessions: 'redis',
         })
       }
+      if (req.method === 'GET' && (await sendStatic(res, path))) return
       const mutation = !['GET', 'HEAD'].includes(req.method || '')
       if (mutation && !config.origins.includes(req.headers.origin || ''))
         fail(403, 'Request origin is not allowed.')

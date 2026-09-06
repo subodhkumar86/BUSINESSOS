@@ -1,4 +1,5 @@
 ﻿import { createApp } from './app.ts'
+import { resolve } from 'node:path'
 const { DATABASE_URL, REDIS_URL, APP_ORIGIN } = process.env
 if (!DATABASE_URL || !REDIS_URL || !APP_ORIGIN)
   throw Error(
@@ -19,7 +20,9 @@ const origins = APP_ORIGIN.split(',').map((value) => {
       throw Error('invalid origin')
     return parsed.origin
   } catch {
-    throw Error('APP_ORIGIN must contain comma-separated absolute origins only.')
+    throw Error(
+      'APP_ORIGIN must contain comma-separated absolute origins only.',
+    )
   }
 })
 if (production && process.env.COOKIE_SECURE !== 'true')
@@ -34,12 +37,12 @@ const app = await createApp({
   redisUrl: REDIS_URL,
   origins,
   secure: process.env.COOKIE_SECURE === 'true',
+  staticDir: production ? resolve('dist') : undefined,
 })
 app.server.listen(
   port,
   process.env.API_HOST || (production ? '0.0.0.0' : '127.0.0.1'),
-  () =>
-    console.log('BusinessOS API ready on port ' + port),
+  () => console.log('BusinessOS API ready on port ' + port),
 )
 for (const signal of ['SIGTERM', 'SIGINT'])
   process.on(signal, () => {
