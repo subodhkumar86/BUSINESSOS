@@ -1,0 +1,2 @@
+﻿const fs=require('fs');let c=fs.readFileSync('src/App.tsx','utf8').replace(/\r\n/g,'\n');const start=c.indexOf("          {current === 'inventory'"),end=c.indexOf("          {current === 'crm'",start);let section=c.slice(start,end);const close=section.lastIndexOf('            </>');section=section.slice(0,close)+`            <StockPanel state={s} search={search} busy={busy} readOnly={readOnly} onCommit={commit} onPurchasing={()=>navigate('procurement')}/>
+`+section.slice(close);c=c.slice(0,start)+section+c.slice(end);fs.writeFileSync('src/App.tsx',c);

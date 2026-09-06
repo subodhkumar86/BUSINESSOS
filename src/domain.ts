@@ -1,0 +1,334 @@
+import { z } from 'zod'
+import type { State, Action } from './types'
+import {hydrateInventory,stockMovement,inventoryValue} from './inventory.ts'
+export const stages = ['New', 'Qualified', 'Proposal', 'Won', 'Lost']
+export const seed = (): State => hydrateInventory({
+  organisation: 'Acme Trading Ltd',
+  currency: 'NGN',
+  products: [
+    {
+      id: 'p1',
+      name: 'Wireless keyboard',
+      sku: 'WK-001',
+      qty: 24,
+      cost: 18000,
+      min: 10,
+    },
+    {
+      id: 'p2',
+      name: 'USB-C docking station',
+      sku: 'DS-002',
+      qty: 5,
+      cost: 42000,
+      min: 10,
+    },
+    {
+      id: 'p3',
+      name: 'Office monitor 27 inch',
+      sku: 'MN-003',
+      qty: 12,
+      cost: 165000,
+      min: 5,
+    },
+  ],
+  invoices: [
+    { id: 'i1', name: 'Northstar Limited', amount: 840000, status: 'Unpaid' },
+    { id: 'i2', name: 'Greenfield Studio', amount: 320000, status: 'Paid' },
+  ],
+  expenses: [],
+  orders: [],
+  leads: [
+    {
+      id: 'l1',
+      name: 'Northstar expansion',
+      amount: 1450000,
+      status: 'Proposal',
+    },
+    {
+      id: 'l2',
+      name: 'Lagos office fit-out',
+      amount: 2250000,
+      status: 'Qualified',
+    },
+    { id: 'l3', name: 'Greenfield accessories', amount: 480000, status: 'New' },
+  ],
+  employees: [
+    {
+      id: 'e1',
+      name: 'Amara Okafor',
+      department: 'Operations',
+      amount: 350000,
+    },
+    { id: 'e2', name: 'Tunde Adeyemi', department: 'Sales', amount: 280000 },
+  ],
+  payroll: [],
+  projects: [
+    {
+      id: 'j1',
+      name: 'Launch Abuja branch',
+      amount: 4500000,
+      status: 'In progress',
+    },
+    { id: 'j2', name: 'September stock audit', amount: 0, status: 'Planned' },
+  ],
+  tasks: [
+    { id: 't1', name: 'Follow up on Northstar invoice', status: 'Open' },
+    { id: 't2', name: 'Reorder docking stations', status: 'Open' },
+  ],
+  audit: [],
+  journals: [],
+  openingCash: 5000000,
+})
+export function metrics(s: State) {
+  const revenue = s.invoices
+    .filter((x) => x.status === 'Paid')
+    .reduce((a, x) => a + x.amount, 0)
+  const spent = s.expenses.reduce((a, x) => a + x.amount, 0)
+  return {
+    cash: s.openingCash + revenue - spent,
+    revenue,
+    receivables: s.invoices
+      .filter((x) => x.status === 'Unpaid')
+      .reduce((a, x) => a + x.amount, 0),
+    payables: s.orders
+      .filter((x) => x.status === 'Received')
+      .reduce((a, x) => a + x.qty * x.cost, 0),
+    stock: s.products.reduce((a, x) => a + inventoryValue(x.qty,x.cost), 0),
+    pipeline: s.leads
+      .filter((x) => !['Won', 'Lost'].includes(x.status))
+      .reduce((a, x) => a + x.amount, 0),
+    low: s.products.filter((x) => x.qty < x.min),
+  }
+}
+export const textValue = z.string().trim().min(1).max(200)
+const numericInput=z.union([z.number(),z.string().trim().min(1)]).transform(Number)
+const amount=numericInput.pipe(z.number().finite().positive().max(1e12).refine(n=>Math.abs(n*100-Math.round(n*100))<0.001,'Use at most two decimal places.'))
+const quantity=numericInput.pipe(z.number().int().min(0).max(100000000))
+const schemas = {
+  invoices: z
+    .object({ name: textValue, amount, status: z.literal('Unpaid').optional() })
+    .strict(),
+  expenses: z.object({ name: textValue, amount }).strict(),
+  leads: z
+    .object({ name: textValue, amount, status: z.literal('New').optional() })
+    .strict(),
+  employees: z
+    .object({ name: textValue, department: textValue, amount })
+    .strict(),
+  projects: z
+    .object({
+      name: textValue,
+      amount,
+      status: z.literal('Planned').optional(),
+    })
+    .strict(),
+  tasks: z
+    .object({ name: textValue, status: z.literal('Open').optional() })
+    .strict(),
+  products: z
+    .object({
+      name: textValue,
+      sku: textValue,
+      qty: quantity,
+      cost: amount,
+      min: quantity,
+    })
+    .strict(),
+  orders: z
+    .object({ name: textValue, product: textValue, qty: quantity.refine(n=>n>0,'Quantity must be positive.') })
+    .strict(),
+}
+export function transition(state: State, action: Action): State {
+  const s = hydrateInventory(state),
+    id = crypto.randomUUID(),
+    date = new Date().toISOString()
+  let source = action.id || id
+  const post = (value: number, debit: string, credit: string) =>
+    s.journals.unshift({
+      id: crypto.randomUUID(),
+      date,
+      source,
+      amount: value,
+      debit,
+      credit,
+    })
+  if (action.type === 'create') {
+    const collection = action.collection as keyof typeof schemas
+    if (!schemas[collection]) throw Error('Unknown record type.')
+    const result = schemas[collection].safeParse(action.data)
+    if (!result.success)
+      throw Error(
+        result.error.issues
+          .map((i) => `${i.path.join('.')}: ${i.message}`)
+          .join('; '),
+      )
+    source = id
+    switch (collection) {
+      case 'invoices': {
+        const r = schemas.invoices.parse(action.data)
+        s.invoices.unshift({ ...r, id, status: 'Unpaid' })
+        post(r.amount, 'Accounts receivable', 'Sales')
+        break
+      }
+      case 'expenses': {
+        const r = schemas.expenses.parse(action.data)
+        s.expenses.unshift({ ...r, id })
+        post(r.amount, 'Operating expenses', 'Cash')
+        break
+      }
+      case 'leads':
+        s.leads.unshift({
+          ...schemas.leads.parse(action.data),
+          id,
+          status: 'New',
+        })
+        break
+      case 'employees':
+        s.employees.unshift({ ...schemas.employees.parse(action.data), id })
+        break
+      case 'projects':
+        s.projects.unshift({
+          ...schemas.projects.parse(action.data),
+          id,
+          status: 'Planned',
+        })
+        break
+      case 'tasks':
+        s.tasks.unshift({
+          ...schemas.tasks.parse(action.data),
+          id,
+          status: 'Open',
+        })
+        break
+      case 'products': {
+        const r = schemas.products.parse(action.data)
+        if (s.products.some((p) => p.sku.toLowerCase() === r.sku.toLowerCase()))
+          throw Error('SKU already exists.')
+        const product={...r,id}
+        const movement=stockMovement(product,0,r.qty,'opening','Opening stock at product registration',id,date)
+        s.products.unshift(product)
+        s.stockMovements.unshift(movement)
+        if(movement.valueDelta>0)post(movement.valueDelta,'Inventory','Opening balance equity')
+        break
+      }
+      case 'orders': {
+        const r = schemas.orders.parse(action.data)
+        const p = s.products.find((p) => p.id === r.product)
+        if (!p) throw Error('Select a product in this workspace.')
+        s.orders.unshift({
+          ...r,
+          id,
+          cost: p.cost,
+          status: 'Pending',
+          requestedBy: action.actor || 'Local workspace owner',
+          requestedAt: date,
+        })
+        break
+      }
+    }
+  } else if (action.type === 'status') {
+    if (
+      !['invoices', 'orders', 'leads', 'projects', 'tasks', 'payroll'].includes(
+        action.collection || '',
+      )
+    )
+      throw Error('Unsupported workflow.')
+    const collection = action.collection as
+      'invoices' | 'orders' | 'leads' | 'projects' | 'tasks' | 'payroll'
+    const r = s[collection].find((x) => x.id === action.id)
+    if (!r) throw Error('Record not found.')
+    const value = action.status || ''
+    if (collection === 'invoices') {
+      if (r.status !== 'Unpaid' || value !== 'Paid')
+        throw Error('Invoice is already settled.')
+      post(
+        s.invoices.find((x) => x.id === r.id)!.amount,
+        'Cash',
+        'Accounts receivable',
+      )
+    } else if (collection === 'orders') {
+      const order = s.orders.find((x) => x.id === r.id)!
+      if (r.status === 'Pending' && value === 'Approved') {
+        if (action.enforceApproverSeparation && order.requestedBy === action.actor)
+          throw Error('A different authorised user must approve this purchase order.')
+        order.approvedBy = action.actor || 'Local workspace owner'
+        order.approvedAt = date
+      } else if (r.status === 'Approved' && value === 'Received') {
+        const p = s.products.find((p) => p.id === order.product)
+        if (!p) throw Error('Product not found.')
+        const movement=stockMovement(p,p.qty,p.qty+order.qty,'receipt','Goods received from '+order.name,order.id,date)
+        p.qty=movement.after
+        s.stockMovements.unshift(movement)
+        post(inventoryValue(order.qty,order.cost), 'Inventory', 'Accounts payable')
+      } else
+        throw Error(
+          'Approve a purchase order before receiving it. Goods can only be received once.',
+        )
+    } else if (collection === 'leads') {
+      if (!stages.includes(value)) throw Error('Invalid sales stage.')
+    } else if (collection === 'projects') {
+      if (!['Planned', 'In progress', 'Completed'].includes(value))
+        throw Error('Invalid project status.')
+    } else if (collection === 'tasks') {
+      if (!['Open', 'Completed'].includes(value))
+        throw Error('Invalid task status.')
+    } else if (collection === 'payroll') {
+      if (r.status !== 'Draft' || value !== 'Approved')
+        throw Error('Payroll already approved.')
+      const payroll = s.payroll.find((item) => item.id === r.id)!
+      if (action.enforceApproverSeparation && payroll.preparedBy === action.actor)
+        throw Error('A different authorised user must approve this payroll run.')
+      payroll.approvedBy = action.actor || 'Local workspace owner'
+      payroll.approvedAt = date
+      post(
+        s.payroll.find((x) => x.id === r.id)!.amount,
+        'Payroll expense',
+        'Payroll payable',
+      )
+    }
+    r.status = value
+  } else if(action.type==='stock_adjust'||action.type==='stock_count'){
+    const reason=z.string().trim().min(3,'Add a reason with at least 3 characters.').max(500)
+    const base={product:textValue,reason,expectedQty:quantity}
+    const result=action.type==='stock_adjust'?z.object({...base,delta:numericInput.pipe(z.number().int().min(-100000000).max(100000000).refine(n=>n!==0,'Quantity change cannot be zero.'))}).strict().safeParse(action.data):z.object({...base,counted:quantity}).strict().safeParse(action.data)
+    if(!result.success)throw Error(result.error.issues.map(i=>i.path.join('.')+': '+i.message).join('; '))
+    const data=result.data,p=s.products.find(p=>p.id===data.product)
+    if(!p)throw Error('Product not found in this workspace.')
+    if(p.qty!==data.expectedQty)throw Error('Stock changed since this form was opened. Review the latest quantity before saving.')
+    const after='delta' in data?p.qty+data.delta:data.counted
+    const movement=stockMovement(p,p.qty,after,action.type==='stock_adjust'?'adjustment':'count',data.reason,id,date)
+    p.qty=after;s.stockMovements.unshift(movement)
+    source=movement.id
+    if(movement.delta<0)post(-movement.valueDelta,'Inventory adjustment expense','Inventory')
+    if(movement.delta>0)post(movement.valueDelta,'Inventory','Inventory adjustment gain')
+  } else if (action.type === 'payroll') {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(action.period || ''))
+      throw Error('Select a valid payroll period.')
+    if (s.payroll.some((p) => p.period === action.period))
+      throw Error('A payroll run already exists for this period.')
+    if (!s.employees.length) throw Error('Add employees first.')
+    s.payroll.unshift({
+      id,
+      name: `Payroll ${action.period}`,
+      period: action.period!,
+      status: 'Draft',
+      amount: s.employees.reduce((a, e) => a + e.amount, 0),
+      inputs: structuredClone(s.employees),
+      preparedBy: action.actor || 'Local workspace owner',
+      preparedAt: date,
+    })
+  } else if (action.type === 'settings') {
+    s.organisation = textValue.parse(action.name)
+  } else throw Error('Unknown action.')
+  s.audit.unshift({
+    id,
+    date,
+    actor: 'Local workspace owner',
+    action: action.type,
+    entity: action.type.startsWith('stock_')?'inventory':action.collection || action.type,
+    detail:
+      action.status ||
+      String(action.data?.reason || action.data?.name || action.name || action.period || ''),
+  })
+  return s
+}

@@ -1,0 +1,5 @@
+﻿const fs=require('fs');let c=fs.readFileSync('src/domain.ts','utf8').replace(/\r\n/g,'\n');const start=c.indexOf('const amount ='),end=c.indexOf('const schemas =',start);c=c.slice(0,start)+`const numericInput=z.union([z.number(),z.string().trim().min(1)])
+const amount=numericInput.pipe(z.coerce.number().finite().positive().max(1e12).refine(n=>Math.abs(n*100-Math.round(n*100))<0.001,'Use at most two decimal places.'))
+const quantity=numericInput.pipe(z.coerce.number().int().min(0).max(100000000))
+`+c.slice(end);c=c.replace('qty: quantity.min(1)',"qty: quantity.refine(n=>n>0,'Quantity must be positive.')");c=c.replace("delta:z.coerce.number().int().min(-100000000).max(100000000).refine(n=>n!==0,'Quantity change cannot be zero.')", "delta:numericInput.pipe(z.coerce.number().int().min(-100000000).max(100000000).refine(n=>n!==0,'Quantity change cannot be zero.'))");fs.writeFileSync('src/domain.ts',c);
+c=fs.readFileSync('src/App.tsx','utf8').replace(/\r\n/g,'\n').replace("              <button onClick={() => navigate('procurement')}>\n                Receive stock through a purchase order →\n              </button>\n",'');fs.writeFileSync('src/App.tsx',c);
