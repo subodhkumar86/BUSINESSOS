@@ -6,6 +6,9 @@ if (!DATABASE_URL || !REDIS_URL || !APP_ORIGIN)
     'Set DATABASE_URL, REDIS_URL and APP_ORIGIN in .env. See .env.example.',
   )
 const production = process.env.NODE_ENV === 'production'
+const cookieSameSite = process.env.COOKIE_SAME_SITE || 'strict'
+if (!['strict', 'none'].includes(cookieSameSite))
+  throw Error('COOKIE_SAME_SITE must be strict or none.')
 const origins = APP_ORIGIN.split(',').map((value) => {
   const input = value.trim()
   try {
@@ -27,6 +30,8 @@ const origins = APP_ORIGIN.split(',').map((value) => {
 })
 if (production && process.env.COOKIE_SECURE !== 'true')
   throw Error('Production requires COOKIE_SECURE=true.')
+if (cookieSameSite === 'none' && process.env.COOKIE_SECURE !== 'true')
+  throw Error('COOKIE_SAME_SITE=none requires COOKIE_SECURE=true.')
 if (production && origins.some((origin) => !origin.startsWith('https://')))
   throw Error('Production APP_ORIGIN values must use HTTPS.')
 const port = Number(process.env.PORT || 3001)
@@ -37,6 +42,7 @@ const app = await createApp({
   redisUrl: REDIS_URL,
   origins,
   secure: process.env.COOKIE_SECURE === 'true',
+  sameSite: cookieSameSite === 'none' ? 'None' : 'Strict',
   staticDir: production ? resolve('dist') : undefined,
 })
 app.server.listen(

@@ -23,3 +23,15 @@ Deploy BusinessOS as one Docker **Web Service** so the React application and API
 6. Open the service URL, register an owner or run the demo seed from a controlled one-off job, and verify the health check, login, and audit log.
 
 Use a non-superuser PostgreSQL role without `BYPASSRLS` for `DATABASE_URL`. Render provides managed TLS for web services; attach a custom domain only after updating `APP_ORIGIN` and redeploying.
+
+## Vercel frontend + Render API
+
+For a split deployment, Vercel hosts the Vite frontend and Render hosts only the API. The API accepts credentialed CORS requests only from the configured Vercel origin; it never uses wildcard CORS.
+
+1. In Render, deploy the Docker web service as above, but set `APP_ORIGIN` to your production Vercel URL (for example, `https://businessos.vercel.app`), `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Keep the Render service publicly reachable and set its health check path to `/api/v1/health`.
+2. In Vercel, import the same GitHub repository and use the `main` branch. The included `vercel.json` runs `npm run build` and publishes `dist`.
+3. In Vercel Project Settings > Environment Variables, set `VITE_API_URL` to your Render API origin only (for example, `https://businessos-api.onrender.com`). Do not include `/api/v1`, a trailing slash, or any secret in this value. Apply it to Production; add the corresponding preview origin to Render's `APP_ORIGIN` only if preview logins are needed.
+4. Deploy Render first, run the migrations, then deploy Vercel. After a Vercel environment-variable change, redeploy the frontend because Vite substitutes `VITE_*` values during its build.
+5. Verify a browser login from the Vercel URL, then confirm the response has `Access-Control-Allow-Origin` equal to the Vercel origin, `Access-Control-Allow-Credentials: true`, and a `Secure; SameSite=None` session cookie.
+
+For long-term production, use custom domains such as `app.example.com` (Vercel) and `api.example.com` (Render), list `https://app.example.com` as `APP_ORIGIN`, and keep HTTPS enabled everywhere.

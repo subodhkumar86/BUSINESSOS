@@ -115,6 +115,7 @@ export async function createApp(config: {
   redisUrl: string
   origins: string[]
   secure?: boolean
+  sameSite?: 'Strict' | 'None'
   prefix?: string
   staticDir?: string
 }) {
@@ -124,6 +125,7 @@ export async function createApp(config: {
       socket: { connectTimeout: 5000, reconnectStrategy: false },
     }),
     prefix = config.prefix || 'bos:'
+  const cookieSameSite = config.sameSite || 'Strict'
   redis.on('error', () =>
     console.error(JSON.stringify({ event: 'redis_error' })),
   )
@@ -389,7 +391,7 @@ export async function createApp(config: {
     })
     res.setHeader(
       'Set-Cookie',
-      `bos_session=${token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800${config.secure ? '; Secure' : ''}`,
+      `bos_session=${token}; HttpOnly; SameSite=${cookieSameSite}; Path=/api; Max-Age=28800${config.secure ? '; Secure' : ''}`,
     )
     return s
   }
@@ -435,6 +437,23 @@ export async function createApp(config: {
     res.setHeader('X-Request-ID', requestId)
     try {
       const path = new URL(req.url || '/', 'http://localhost').pathname
+      const origin = req.headers.origin
+      if (origin && config.origins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin)
+        res.setHeader('Access-Control-Allow-Credentials', 'true')
+        res.setHeader('Vary', 'Origin')
+      }
+      if (req.method === 'OPTIONS' && path.startsWith('/api/v1/')) {
+        if (!origin || !config.origins.includes(origin))
+          fail(403, 'Request origin is not allowed.')
+        res.writeHead(204, {
+          'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers':
+            'Content-Type, X-CSRF-Token, Idempotency-Key',
+          'Access-Control-Max-Age': '600',
+        })
+        return res.end()
+      }
       if (req.method === 'GET' && path === '/api/v1/health') {
         await store.pool.query('SELECT 1')
         await redis.ping()
@@ -725,7 +744,7 @@ export async function createApp(config: {
         await redis.del(key)
         res.setHeader(
           'Set-Cookie',
-          `bos_session=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0${config.secure ? '; Secure' : ''}`,
+          `bos_session=; HttpOnly; SameSite=${cookieSameSite}; Path=/api; Max-Age=0${config.secure ? '; Secure' : ''}`,
         )
         return send(res, 200, { ok: true })
       }
@@ -779,7 +798,7 @@ export async function createApp(config: {
         await redis.del(key)
         res.setHeader(
           'Set-Cookie',
-          'bos_session=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0' +
+          `bos_session=; HttpOnly; SameSite=${cookieSameSite}; Path=/api; Max-Age=0` +
             (config.secure ? '; Secure' : ''),
         )
         return send(res, 200, { ok: true })
