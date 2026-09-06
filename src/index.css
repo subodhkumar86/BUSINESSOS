@@ -1006,7 +1006,83 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
-.stock-form{border:0;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:18px}.stock-form>label{display:block}.stock-form input,.stock-form select,.stock-form textarea{display:block;width:100%;margin-top:8px}.stock-form textarea{font:inherit;min-height:80px;resize:vertical;border:1px solid #dfe1ec;border-radius:7px;padding:10px 12px}.stock-form>.stock-preview,.stock-form>.footnote,.stock-form>.alert{grid-column:1/-1}.stock-preview{display:flex;gap:24px;flex-wrap:wrap;background:#f6f5fd;padding:17px;border-radius:8px;font-size:12px;color:#7d7893}.stock-preview b{display:block;font-size:20px;margin-top:8px;color:#6258b1}.stock-form:disabled{opacity:.65}.history-controls{display:flex;gap:10px;flex-wrap:wrap}.history-controls select{font-size:11px}.movement-details{white-space:normal;min-width:230px;max-width:350px}.movement-details summary{cursor:pointer}.movement-details p{margin-top:12px}.stock-form>.alert{gap:14px}@media(max-width:720px){.stock-form{grid-template-columns:1fr}}
+.stock-form {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.stock-form > label {
+  display: block;
+}
+.stock-form input,
+.stock-form select,
+.stock-form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+.stock-form textarea {
+  font: inherit;
+  min-height: 80px;
+  resize: vertical;
+  border: 1px solid #dfe1ec;
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+.stock-form > .stock-preview,
+.stock-form > .footnote,
+.stock-form > .alert {
+  grid-column: 1/-1;
+}
+.stock-preview {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  background: #f6f5fd;
+  padding: 17px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #7d7893;
+}
+.stock-preview b {
+  display: block;
+  font-size: 20px;
+  margin-top: 8px;
+  color: #6258b1;
+}
+.stock-form:disabled {
+  opacity: 0.65;
+}
+.history-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.history-controls select {
+  font-size: 11px;
+}
+.movement-details {
+  white-space: normal;
+  min-width: 230px;
+  max-width: 350px;
+}
+.movement-details summary {
+  cursor: pointer;
+}
+.movement-details p {
+  margin-top: 12px;
+}
+.stock-form > .alert {
+  gap: 14px;
+}
+@media (max-width: 720px) {
+  .stock-form {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* Role Matrix & Security Styles */
 .role-matrix-container {
@@ -1340,3 +1416,179 @@ button:disabled {
   padding-bottom: 4px;
 }
 
+/* Responsive layout hardening */
+img,
+svg {
+  max-width: 100%;
+}
+
+@media (max-width: 960px) {
+  header {
+    padding: 0 24px;
+  }
+  header > div {
+    gap: 12px;
+  }
+  .welcome,
+  .page-heading,
+  .toolbar,
+  .notice,
+  .alert,
+  .scenario,
+  .role-header,
+  .forecast-header,
+  .anomaly-item {
+    flex-wrap: wrap;
+  }
+  .toolbar {
+    gap: 12px;
+  }
+  .toolbar input {
+    min-width: 0;
+    flex: 1 1 220px;
+  }
+  .role-two-col {
+    grid-template-columns: 1fr;
+  }
+  .admin-subnav {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .admin-subnav button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 720px) {
+  body {
+    overflow-x: hidden;
+  }
+  header {
+    height: auto;
+    min-height: 56px;
+    padding: 10px 16px;
+    gap: 10px;
+  }
+  header > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  header > div {
+    min-width: 0;
+    flex-shrink: 0;
+  }
+  header .muted,
+  header .local-tag,
+  .role-simulator-badge {
+    display: none;
+  }
+  .role-switcher-wrap {
+    padding: 3px 5px;
+  }
+  .role-switcher-wrap select {
+    max-width: 118px;
+    padding: 4px;
+  }
+  .role-tag {
+    max-width: 105px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .page-heading {
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .page-heading > button {
+    width: 100%;
+  }
+  .welcome,
+  .notice,
+  .alert,
+  .account-row,
+  .preview-row,
+  .anomaly-item,
+  .modal-actions,
+  footer {
+    align-items: stretch;
+  }
+  .notice,
+  .alert,
+  .account-row,
+  .preview-row,
+  .anomaly-item,
+  footer {
+    flex-wrap: wrap;
+  }
+  .notice button,
+  .alert button,
+  .anomaly-item button {
+    width: 100%;
+  }
+  .scenario {
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+  .scenario span {
+    min-width: calc(50% - 9px);
+  }
+  .ai-forecast-grid,
+  .plans-grid {
+    grid-template-columns: 1fr;
+  }
+  .forecast-header {
+    align-items: flex-start;
+  }
+  .forecast-meta span {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .auth-shell {
+    padding: 16px;
+    align-items: start;
+    padding-top: 8vh;
+  }
+  .auth-card {
+    padding: 24px 20px;
+  }
+  .modal {
+    width: 100%;
+    max-height: calc(100vh - 32px);
+    padding: 22px 18px;
+  }
+  .modal-actions {
+    flex-direction: column-reverse;
+  }
+  .modal-actions button {
+    width: 100%;
+  }
+  .table-scroll {
+    margin-right: -18px;
+    padding-right: 18px;
+  }
+}
+
+@media (max-width: 390px) {
+  main {
+    padding: 20px 14px;
+  }
+  .stats,
+  .inline-form {
+    grid-template-columns: 1fr;
+  }
+  .welcome {
+    padding: 18px;
+  }
+  .card,
+  .forecast-card,
+  .role-detail-card,
+  .admin-header {
+    padding: 16px;
+  }
+  .scenario span {
+    min-width: 100%;
+  }
+}

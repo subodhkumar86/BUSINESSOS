@@ -43,6 +43,17 @@ const demos = [
     order: '60000000-0000-4000-8000-000000000003',
   },
 ] as const
+const selectedTenant = process.env.DEMO_TENANT?.trim().toLowerCase()
+const selectedDemos = selectedTenant
+  ? demos.filter((demo) =>
+      [demo.organisation, demo.email, demo.tenant]
+        .join(' ')
+        .toLowerCase()
+        .includes(selectedTenant),
+    )
+  : demos
+if (selectedTenant && !selectedDemos.length)
+  throw Error('DEMO_TENANT did not match a documented demo tenant.')
 
 async function hash(value: string) {
   const salt = randomBytes(16).toString('hex')
@@ -60,35 +71,74 @@ const demoRoles = [
   ['auditor', 'Auditor User', 'audit'],
 ] as const
 
-async function seedRoleUsers(client: import('pg').PoolClient, demo: (typeof demos)[number], roleHash: string) {
+async function seedRoleUsers(
+  client: import('pg').PoolClient,
+  demo: (typeof demos)[number],
+  roleHash: string,
+) {
   for (const [role, label, alias] of demoRoles) {
     const email = `${alias}@${demo.email.split('@')[1]}`
-    const exists = await client.query<{ id: string }>('SELECT id FROM users WHERE email=$1', [email])
+    const exists = await client.query<{ id: string }>(
+      'SELECT id FROM users WHERE email=$1',
+      [email],
+    )
     if (exists.rowCount) {
       await client.query(
         'UPDATE users SET name=$1,password=$2,role=$3,active=true,session_version=session_version+1 WHERE id=$4 AND tenant_id=$5',
-        [`${demo.organisation} ${label}`, roleHash, role, exists.rows[0].id, demo.tenant],
+        [
+          `${demo.organisation} ${label}`,
+          roleHash,
+          role,
+          exists.rows[0].id,
+          demo.tenant,
+        ],
       )
     } else {
       await client.query(
         'INSERT INTO users(id,tenant_id,email,name,password,role) VALUES($1,$2,$3,$4,$5,$6)',
-        [randomUUID(), demo.tenant, email, `${demo.organisation} ${label}`, roleHash, role],
+        [
+          randomUUID(),
+          demo.tenant,
+          email,
+          `${demo.organisation} ${label}`,
+          roleHash,
+          role,
+        ],
       )
     }
   }
 }
 
-async function seedOperationalData(client: import('pg').PoolClient, demo: (typeof demos)[number]) {
-  const owner = (await client.query<{ id: string }>('SELECT id FROM users WHERE email=$1', [demo.email])).rows[0].id
-  const tenant = (await client.query<{ state: State }>('SELECT state FROM tenants WHERE id=$1 FOR UPDATE', [demo.tenant])).rows[0]
+async function seedOperationalData(
+  client: import('pg').PoolClient,
+  demo: (typeof demos)[number],
+) {
+  const owner = (
+    await client.query<{ id: string }>('SELECT id FROM users WHERE email=$1', [
+      demo.email,
+    ])
+  ).rows[0].id
+  const tenant = (
+    await client.query<{ state: State }>(
+      'SELECT state FROM tenants WHERE id=$1 FOR UPDATE',
+      [demo.tenant],
+    )
+  ).rows[0]
   if (!tenant) throw Error(`Demo tenant ${demo.organisation} was not created.`)
   const state = tenant.state
   let stateChanged = false
   if (!state.expenses.some((expense) => expense.id === demo.expense)) {
-    state.expenses.unshift({ id: demo.expense, name: 'September office operations', amount: 185000 })
+    state.expenses.unshift({
+      id: demo.expense,
+      name: 'September office operations',
+      amount: 185000,
+    })
     stateChanged = true
   }
-  if (!state.orders.some((order) => order.id === demo.order) && state.products[0]) {
+  if (
+    !state.orders.some((order) => order.id === demo.order) &&
+    state.products[0]
+  ) {
     state.orders.unshift({
       id: demo.order,
       name: 'Kora Imports',
@@ -108,7 +158,10 @@ async function seedOperationalData(client: import('pg').PoolClient, demo: (typeo
       name: 'Payroll 2026-09',
       period: '2026-09',
       status: 'Approved',
-      amount: state.employees.reduce((sum, employee) => sum + employee.amount, 0),
+      amount: state.employees.reduce(
+        (sum, employee) => sum + employee.amount,
+        0,
+      ),
       inputs: structuredClone(state.employees),
       preparedBy: demo.email,
       preparedAt: '2026-09-25T09:00:00.000Z',
@@ -119,36 +172,62 @@ async function seedOperationalData(client: import('pg').PoolClient, demo: (typeo
     stateChanged = true
   }
   if (stateChanged)
-    await client.query('UPDATE tenants SET state=$1,version=version+1 WHERE id=$2', [state, demo.tenant])
+    await client.query(
+      'UPDATE tenants SET state=$1,version=version+1 WHERE id=$2',
+      [state, demo.tenant],
+    )
   const existingExpenseJournal = await client.query(
     "SELECT 1 FROM journals WHERE tenant_id=$1 AND payload->>'source'=$2",
     [demo.tenant, demo.expense],
   )
   if (!existingExpenseJournal.rowCount)
-    await client.query('INSERT INTO journals(id,tenant_id,payload) VALUES($1,$2,$3)', [
-      randomUUID(), demo.tenant,
-      {
-        id: randomUUID(), date: '2026-09-20T10:00:00.000Z', source: demo.expense,
-        amount: 185000, debit: 'Operating expenses', credit: 'Cash',
-      },
-    ])
+    await client.query(
+      'INSERT INTO journals(id,tenant_id,payload) VALUES($1,$2,$3)',
+      [
+        randomUUID(),
+        demo.tenant,
+        {
+          id: randomUUID(),
+          date: '2026-09-20T10:00:00.000Z',
+          source: demo.expense,
+          amount: 185000,
+          debit: 'Operating expenses',
+          credit: 'Cash',
+        },
+      ],
+    )
   const existingJournal = await client.query(
     "SELECT 1 FROM journals WHERE tenant_id=$1 AND payload->>'source'=$2",
     [demo.tenant, demo.payroll],
   )
   if (!existingJournal.rowCount)
-    await client.query('INSERT INTO journals(id,tenant_id,payload) VALUES($1,$2,$3)', [
-      randomUUID(), demo.tenant,
-      {
-        id: randomUUID(), date: '2026-09-26T10:00:00.000Z', source: demo.payroll,
-        amount: payroll.amount, debit: 'Payroll expense', credit: 'Payroll payable',
-      },
-    ])
+    await client.query(
+      'INSERT INTO journals(id,tenant_id,payload) VALUES($1,$2,$3)',
+      [
+        randomUUID(),
+        demo.tenant,
+        {
+          id: randomUUID(),
+          date: '2026-09-26T10:00:00.000Z',
+          source: demo.payroll,
+          amount: payroll.amount,
+          debit: 'Payroll expense',
+          credit: 'Payroll payable',
+        },
+      ],
+    )
   await client.query(
     `INSERT INTO payroll_payment_batches(id,tenant_id,payroll_run_id,idempotency_key,amount,status,created_by)
      VALUES($1,$2,$3,$4,$5,'pending',$6)
      ON CONFLICT (tenant_id,payroll_run_id) DO NOTHING`,
-    [demo.paymentBatch, demo.tenant, demo.payroll, randomUUID(), payroll.amount, owner],
+    [
+      demo.paymentBatch,
+      demo.tenant,
+      demo.payroll,
+      randomUUID(),
+      payroll.amount,
+      owner,
+    ],
   )
   await client.query(
     `INSERT INTO bank_accounts(id,tenant_id,provider,external_ref,name,currency,status)
@@ -156,7 +235,12 @@ async function seedOperationalData(client: import('pg').PoolClient, demo: (typeo
      ON CONFLICT (tenant_id,provider,external_ref) DO NOTHING`,
     [randomUUID(), demo.tenant],
   )
-  const account = (await client.query<{ id: string }>('SELECT id FROM bank_accounts WHERE tenant_id=$1 AND external_ref=$2', [demo.tenant, 'demo-operating-account'])).rows[0]
+  const account = (
+    await client.query<{ id: string }>(
+      'SELECT id FROM bank_accounts WHERE tenant_id=$1 AND external_ref=$2',
+      [demo.tenant, 'demo-operating-account'],
+    )
+  ).rows[0]
   await client.query(
     `INSERT INTO bank_transactions(id,tenant_id,bank_account_id,external_ref,occurred_at,amount,direction,reference,raw_payload)
      VALUES($1,$2,$3,'demo-opening-credit',now(),5000000,'credit','Opening balance',$4)
@@ -191,7 +275,12 @@ async function seedOperationalData(client: import('pg').PoolClient, demo: (typeo
     `INSERT INTO documents(id,tenant_id,filename,mime_type,size_bytes,storage_key,uploaded_by)
      SELECT $1,$2,'Supplier agreement.pdf','application/pdf',24576,$3,$4
      WHERE NOT EXISTS (SELECT 1 FROM documents WHERE tenant_id=$2 AND filename='Supplier agreement.pdf')`,
-    [randomUUID(), demo.tenant, `${demo.tenant}/demo/supplier-agreement.pdf`, owner],
+    [
+      randomUUID(),
+      demo.tenant,
+      `${demo.tenant}/demo/supplier-agreement.pdf`,
+      owner,
+    ],
   )
 }
 
@@ -200,14 +289,18 @@ function withFreshIds<T extends { id: string }>(rows: T[]) {
 }
 
 const databaseUrl = process.env.DATABASE_URL
-if (!databaseUrl) throw Error('Set DATABASE_URL in .env before seeding demo tenants.')
+if (!databaseUrl)
+  throw Error('Set DATABASE_URL in .env before seeding demo tenants.')
 
-const pool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 })
+const pool = new Pool({
+  connectionString: databaseUrl,
+  connectionTimeoutMillis: 5000,
+})
 const passwordHash = await hash(password)
 const rolePasswordHash = await hash(rolePassword)
 
 try {
-  for (const demo of demos) {
+  for (const demo of selectedDemos) {
     const existing = await pool.query<{ tenant_id: string }>(
       'SELECT tenant_id FROM users WHERE email=$1',
       [demo.email],
@@ -216,7 +309,9 @@ try {
       const client = await pool.connect()
       try {
         await client.query('BEGIN')
-        await client.query("SELECT set_config('app.tenant_id',$1,true)", [demo.tenant])
+        await client.query("SELECT set_config('app.tenant_id',$1,true)", [
+          demo.tenant,
+        ])
         await seedModuleRecords(client, demo.tenant)
         await seedRoleUsers(client, demo, rolePasswordHash)
         await seedOperationalData(client, demo)
@@ -256,7 +351,9 @@ try {
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      await client.query("SELECT set_config('app.tenant_id',$1,true)", [demo.tenant])
+      await client.query("SELECT set_config('app.tenant_id',$1,true)", [
+        demo.tenant,
+      ])
       await client.query('INSERT INTO tenants(id,state) VALUES($1,$2)', [
         demo.tenant,
         state,
