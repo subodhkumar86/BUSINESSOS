@@ -59,6 +59,7 @@ export interface Payroll {
   status: string
   amount: number
   inputs: Employee[]
+  rulesVersion?: 'NG-2026-v1' | 'NG-PITA-legacy-v1'
   preparedBy?: string
   preparedAt?: string
   approvedBy?: string
@@ -330,8 +331,107 @@ export interface CommunicationRecord {
 }
 
 export interface Snapshot {
+  entitlements?: import('./entitlements').Entitlements
   state: State
   version: number
   user: User
   csrf: string
+}
+
+export interface IncomeStatement {
+  period: string
+  revenue: number
+  cogs: number
+  grossProfit: number
+  grossMarginPercent: number
+  operatingExpenses: number
+  netProfit: number
+}
+
+export interface BalanceSheet {
+  asOfDate: string
+  assets: {
+    cash: number
+    receivables: number
+    inventory: number
+    totalAssets: number
+  }
+  liabilities: {
+    payables: number
+    accruedPayroll: number
+    statutoryPayable: number
+    totalLiabilities: number
+  }
+  equity: {
+    openingEquity: number
+    retainedEarnings: number
+    totalEquity: number
+  }
+  isBalanced: boolean
+}
+
+export interface CashFlowStatement {
+  period: string
+  operatingInflows: number
+  operatingOutflows: number
+  netCashFlow: number
+  openingCash: number
+  closingCash: number
+}
+
+export interface StatutoryPayrollBreakdown {
+  grossSalary: number
+  employeePension: number
+  employerPension: number
+  payeTax: number
+  totalDeductions: number
+  netSalary: number
+}
+
+export interface EmployeePayslip {
+  id: string
+  employeeId: string
+  employeeName: string
+  department: string
+  period: string
+  grossPay: number
+  employeePension: number
+  employerPension: number
+  payeTax: number
+  totalDeductions: number
+  netPay: number
+  currency: string
+}
+
+export interface MarketingCampaignRecord {
+  id: string
+  name: string
+  channel: 'social' | 'email' | 'search' | 'event' | 'referral'
+  budget: number
+  spend: number
+  leadsCount: number
+  revenueGenerated: number
+  roiPercent: number
+  status: 'planning' | 'active' | 'completed' | 'paused'
+}
+
+export interface ComplianceRiskRecord {
+  id: string
+  title: string
+  category: 'financial' | 'operational' | 'regulatory' | 'security' | 'vendor'
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  status: 'identified' | 'mitigating' | 'controlled' | 'accepted'
+  mitigationPlan: string
+  reviewDate: string
+}
+
+export interface StockTransferRecord {
+  id: string
+  sourceLocation: string
+  destinationLocation: string
+  product: string
+  productName: string
+  quantity: number
+  status: 'draft' | 'in_transit' | 'completed'
+  transferredAt: string
 }

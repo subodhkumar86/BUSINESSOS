@@ -1,16 +1,42 @@
 import { useEffect, useState } from 'react'
 import App from './App'
+import { Marketing } from './Marketing'
+import { PasswordReset } from './PasswordReset'
 import { request, ApiError } from './api'
 import type { Snapshot } from './types'
 export default function Workspace() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [demo, setDemo] = useState(false),
     [loading, setLoading] = useState(true),
+    [showAuth, setShowAuth] = useState(
+      () =>
+        window.location.pathname.startsWith('/app') ||
+        window.location.pathname === '/login' ||
+        window.location.pathname.startsWith('/admin'),
+    ),
     [register, setRegister] = useState(false),
     [recover, setRecover] = useState(false),
     [error, setError] = useState(''),
     [notice, setNotice] = useState(''),
     [busy, setBusy] = useState(false)
+  const [reset, setReset] = useState(
+    () => window.location.pathname === '/reset-password',
+  )
+  useEffect(() => {
+    const syncRoute = () => {
+      const path = window.location.pathname
+      setReset(path === '/reset-password')
+      setShowAuth(
+        path.startsWith('/app') ||
+          path === '/login' ||
+          path.startsWith('/admin'),
+      )
+      setError('')
+      setNotice('')
+    }
+    window.addEventListener('popstate', syncRoute)
+    return () => window.removeEventListener('popstate', syncRoute)
+  }, [])
   useEffect(() => {
     let active = true
     request<Snapshot>('/workspace')
@@ -51,6 +77,21 @@ export default function Workspace() {
       setError(e instanceof Error ? e.message : 'Could not sign out.')
     }
   }
+  if (reset)
+    return (
+      <PasswordReset
+        onBack={() => {
+          window.history.replaceState({}, '', '/login')
+          setReset(false)
+          setShowAuth(true)
+          setRecover(false)
+          setRegister(false)
+          setSnapshot(null)
+          setError('')
+          setNotice('')
+        }}
+      />
+    )
   if (loading)
     return (
       <div className="auth-shell">
@@ -82,26 +123,48 @@ export default function Workspace() {
         />
       </>
     )
+  if (!showAuth) {
+    return (
+      <Marketing
+        onLaunchApp={() => {
+          window.history.pushState({}, '', '/app/dashboard')
+          setShowAuth(true)
+        }}
+        initialPath={window.location.pathname}
+      />
+    )
+  }
+
   return (
     <div className="auth-shell">
       <div className="auth-card">
         <div className="brand">
           <span className="logo">B</span>BusinessOS
         </div>
-        <h1>{recover ? 'Recover your account' : register ? 'Create your workspace' : 'Welcome back'}</h1>
+        <h1>
+          {recover
+            ? 'Recover your account'
+            : register
+              ? 'Create your workspace'
+              : 'Welcome back'}
+        </h1>
         <p>
           {recover
-            ? 'Enter your email and we will send a secure reset link if the account exists.'
+            ? 'Request a reset code for your account. Local development can return a code; email delivery is not configured yet.'
             : register
-            ? 'Start with your organisation and owner account.'
-            : 'Sign in to your business workspace.'}
+              ? 'Start with your organisation and owner account.'
+              : 'Sign in to your business workspace.'}
         </p>
         {error && (
           <div role="alert" className="alert">
             {error}
           </div>
         )}
-        {notice && <div role="status" className="notice">{notice}</div>}
+        {notice && (
+          <div role="status" className="notice">
+            {notice}
+          </div>
+        )}
         <form
           onSubmit={async (e) => {
             e.preventDefault()
@@ -111,11 +174,25 @@ export default function Workspace() {
             const values = Object.fromEntries(new FormData(e.currentTarget))
             try {
               if (recover) {
-                await request('/auth/password-reset/request', {
-                  method: 'POST',
-                  body: JSON.stringify(values),
-                })
-                setNotice('If the account exists, a secure reset link will be sent.')
+                const result = await request<{ developmentToken?: string }>(
+                  '/auth/password-reset/request',
+                  {
+                    method: 'POST',
+                    body: JSON.stringify(values),
+                  },
+                )
+                if (result.developmentToken) {
+                  window.history.pushState(
+                    {},
+                    '',
+                    '/reset-password#token=' +
+                      encodeURIComponent(result.developmentToken),
+                  )
+                  setReset(true)
+                } else
+                  setNotice(
+                    'Request received. Contact your workspace administrator for recovery assistance. Email delivery is not configured.',
+                  )
                 return
               }
               const payload = register
@@ -160,17 +237,19 @@ export default function Workspace() {
             Email
             <input name="email" type="email" autoComplete="email" required />
           </label>
-          {!recover && <label>
-            Password
-            <input
-              name="password"
-              type="password"
-              minLength={register ? 12 : 1}
-              maxLength={128}
-              autoComplete={register ? 'new-password' : 'current-password'}
-              required
-            />
-          </label>}
+          {!recover && (
+            <label>
+              Password
+              <input
+                name="password"
+                type="password"
+                minLength={register ? 12 : 1}
+                maxLength={128}
+                autoComplete={register ? 'new-password' : 'current-password'}
+                required
+              />
+            </label>
+          )}
           {register && !recover && (
             <label className="task">
               <input type="checkbox" name="sample" /> Start with labelled sample
@@ -178,20 +257,28 @@ export default function Workspace() {
             </label>
           )}
           <button className="primary" disabled={busy}>
-            {busy ? 'Please wait…' : recover ? 'Send reset link' : register ? 'Create workspace' : 'Sign in'}
+            {busy
+              ? 'Please wait…'
+              : recover
+                ? 'Request reset code'
+                : register
+                  ? 'Create workspace'
+                  : 'Sign in'}
           </button>
         </form>
-        {!recover && <button
-          className="text-button"
-          onClick={() => {
-            setRegister(!register)
-            setError('')
-          }}
-        >
-          {register
-            ? 'Already have an account? Sign in'
-            : 'Create a new workspace'}
-        </button>}
+        {!recover && (
+          <button
+            className="text-button"
+            onClick={() => {
+              setRegister(!register)
+              setError('')
+            }}
+          >
+            {register
+              ? 'Already have an account? Sign in'
+              : 'Create a new workspace'}
+          </button>
+        )}
         <button
           className="text-button"
           onClick={() => {
@@ -204,6 +291,17 @@ export default function Workspace() {
           {recover ? 'Back to sign in' : 'Forgot password?'}
         </button>
         <hr />
+        {recover && (
+          <button
+            className="text-button"
+            onClick={() => {
+              window.history.pushState({}, '', '/reset-password')
+              setReset(true)
+            }}
+          >
+            I already have a reset code
+          </button>
+        )}
         <button
           onClick={() => {
             setDemo(true)
@@ -211,6 +309,16 @@ export default function Workspace() {
           }}
         >
           Explore browser demo
+        </button>
+        <button
+          className="text-button"
+          style={{ marginTop: '8px' }}
+          onClick={() => {
+            setShowAuth(false)
+            window.history.pushState({}, '', '/')
+          }}
+        >
+          ← Back to BusinessOS Website
         </button>
         <small>
           The demo stays in this browser. It is never uploaded automatically.

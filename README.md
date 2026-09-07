@@ -170,3 +170,11 @@ Remaining production work follows the PRD stack:
 No banking, AI or messaging credentials are configured and no live external transaction is performed.
 
 Implementation references: [node-postgres transactions](https://node-postgres.com/features/transactions), [PostgreSQL row security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html), [Redis Node client](https://redis.io/docs/latest/develop/clients/nodejs/).
+
+## Latest implementation and local recovery
+
+See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current verified workflows and remaining work. The full PRD is not yet complete.
+
+To exercise account recovery locally, set RETURN_RESET_TOKEN=true in your local environment and restart the API. On the sign-in screen choose Forgot password, enter an existing account email, and request a code. The development response opens the reset form. You can also open /reset-password and paste a code. Codes expire after 30 minutes and are single-use; a successful reset invalidates existing sessions. Production never returns these codes. Email delivery still needs an adapter.
+
+Billing shows configured feature access and the active-seat limit, not proof of payment. Adding or reactivating users at capacity returns an actionable error. Tenant owners cannot provision platform super-admin accounts.

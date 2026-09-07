@@ -23,9 +23,6 @@ function run(
   })
 }
 const compose = ['compose', '-p', project, '-f', 'compose.test.yaml']
-const database =
-    'postgresql://businessos_app:test_app_only@127.0.0.1:55432/businessos_test',
-  redis = 'redis://127.0.0.1:56379/15'
 let started = false
 try {
   const info = await promisify(execFile)(
@@ -44,6 +41,14 @@ try {
     '--wait-timeout',
     '90',
   ])
+  async function mappedPort(service: string, port: string) {
+    const result = await promisify(execFile)('docker',[...compose,'port',service,port],{windowsHide:true})
+    const mapped = result.stdout.trim().split(':').pop()
+    if (!mapped || !/^\d+$/.test(mapped)) throw Error('Could not resolve test service port.')
+    return mapped
+  }
+  const database = 'postgresql://businessos_app:test_app_only@127.0.0.1:' + await mappedPort('postgres','5432') + '/businessos_test'
+  const redis = 'redis://127.0.0.1:' + await mappedPort('redis','6379') + '/15'
   await run(process.execPath, ['scripts/migrate.ts'], {
     ...process.env,
     DATABASE_URL: database,

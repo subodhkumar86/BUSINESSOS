@@ -1,6 +1,15 @@
+import { periodState, periodLabel, openingCashForPeriod, type ReportingPeriod } from './reporting.ts'
 import { z } from 'zod'
-import type { State, Action } from './types'
-import {hydrateInventory,stockMovement,inventoryValue} from './inventory.ts'
+import type {
+  State,
+  Action,
+  IncomeStatement,
+  BalanceSheet,
+  CashFlowStatement,
+  StatutoryPayrollBreakdown,
+  EmployeePayslip,
+} from './types'
+import { hydrateInventory, stockMovement, inventoryValue } from './inventory.ts'
 export const stages = ['New', 'Qualified', 'Proposal', 'Won', 'Lost']
 export const seed = (): State => hydrateInventory({
   organisation: 'Acme Trading Ltd',
@@ -100,6 +109,135 @@ export function metrics(s: State) {
     low: s.products.filter((x) => x.qty < x.min),
   }
 }
+
+// Reports use posted journals. Legacy demo records without postings are excluded.
+const roundMoney = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+function accountBalance(s: State, account: string) {
+  return roundMoney(s.journals.reduce((sum, j) => sum + (j.debit === account ? j.amount : 0) - (j.credit === account ? j.amount : 0), 0))
+}
+export function generateIncomeStatement(state: State, period: ReportingPeriod = {}): IncomeStatement {
+  const s = periodState(state, period)
+  const revenue = -accountBalance(s, 'Sales') || 0
+  const cogs = accountBalance(s, 'Cost of goods sold')
+  const grossProfit = roundMoney(revenue - cogs)
+  const operatingExpenses = roundMoney(accountBalance(s, 'Operating expenses') + accountBalance(s, 'Payroll expense') + accountBalance(s, 'Inventory adjustment expense') + accountBalance(s, 'Inventory adjustment gain'))
+  return { period: periodLabel(period), revenue, cogs, grossProfit, grossMarginPercent: revenue ? roundMoney(grossProfit / revenue * 100) : 0, operatingExpenses, netProfit: roundMoney(grossProfit - operatingExpenses) }
+}
+export function generateBalanceSheet(state: State, period: ReportingPeriod = {}): BalanceSheet {
+  const s = periodState(state, period, true)
+  const cash = roundMoney(s.openingCash + accountBalance(s, 'Cash'))
+  const receivables = accountBalance(s, 'Accounts receivable'), inventory = accountBalance(s, 'Inventory')
+  const payables = -accountBalance(s, 'Accounts payable'), accruedPayroll = -accountBalance(s, 'Payroll payable')
+  const statutoryPayable = -accountBalance(s,'Pension payable')-accountBalance(s,'Tax payable')
+  const openingEquity = roundMoney(s.openingCash - accountBalance(s, 'Opening balance equity'))
+  const retainedEarnings = generateIncomeStatement(s).netProfit
+  const totalAssets = roundMoney(cash + receivables + inventory), totalLiabilities = roundMoney(payables + accruedPayroll + statutoryPayable), totalEquity = roundMoney(openingEquity + retainedEarnings)
+  return { asOfDate: period.to || 'Latest posting', assets: {cash,receivables,inventory,totalAssets}, liabilities: {payables,accruedPayroll,statutoryPayable,totalLiabilities}, equity: {openingEquity,retainedEarnings,totalEquity}, isBalanced: Math.abs(totalAssets-totalLiabilities-totalEquity)<0.01 }
+}
+export function generateCashFlowStatement(state: State, period: ReportingPeriod = {}): CashFlowStatement {
+  const s = periodState(state, period)
+  const openingCash = roundMoney(openingCashForPeriod(state, period))
+  const operatingInflows = roundMoney(s.journals.filter(j => j.debit === 'Cash').reduce((sum,j) => sum+j.amount,0))
+  const operatingOutflows = roundMoney(s.journals.filter(j => j.credit === 'Cash').reduce((sum,j) => sum+j.amount,0))
+  const netCashFlow = roundMoney(operatingInflows-operatingOutflows)
+  return {period:periodLabel(period),openingCash,operatingInflows,operatingOutflows,netCashFlow,closingCash:roundMoney(openingCash+netCashFlow)}
+}
+
+/**
+ * Statutory Payroll Calculation Engine (Nigerian PITA & Pension Reform Act 2014)
+ */
+export function calculateStatutoryPayroll(gross: number, rulesVersion = 'NG-2026-v1'): StatutoryPayrollBreakdown {
+  if (!Number.isFinite(gross) || gross < 0) throw Error('Gross pay must be a finite non-negative amount.')
+  if (rulesVersion === 'NG-2026-v1') {
+    const employeePension = roundMoney(gross * 0.08), employerPension = roundMoney(gross * 0.10)
+    let remaining = Math.max(0,(gross-employeePension)*12), annualTax=0
+    const bands: [number,number][] = [[800000,0],[2200000,0.15],[9000000,0.18],[13000000,0.21],[25000000,0.23],[Infinity,0.25]]
+    for (const [width,rate] of bands) { const value=Math.min(remaining,width); annualTax+=value*rate; remaining-=value; if(remaining<=0) break }
+    const payeTax = gross <= 70000 ? 0 : roundMoney(annualTax/12)
+    const totalDeductions=roundMoney(employeePension+payeTax)
+    return {grossSalary:gross,employeePension,employerPension,payeTax,totalDeductions,netSalary:roundMoney(gross-totalDeductions)}
+  }
+  if (rulesVersion !== 'NG-PITA-legacy-v1') throw Error('Unknown payroll rules version.')
+  if (gross <= 0) {
+    return { grossSalary: 0, employeePension: 0, employerPension: 0, payeTax: 0, totalDeductions: 0, netSalary: 0 }
+  }
+  // Employee Pension: 8% of Gross
+  const employeePension = Math.round(gross * 0.08)
+  // Employer Pension: 10% of Gross
+  const employerPension = Math.round(gross * 0.10)
+
+  // Consolidated Relief Allowance (CRA): Higher of 200,000/12 (₦16,667/mo) or 1% of gross, + 20% of gross
+  const craFixed = Math.max(16666.67, gross * 0.01)
+  const craVariable = gross * 0.20
+  const cra = craFixed + craVariable
+
+  // Taxable monthly income
+  const taxableIncome = Math.max(0, gross - employeePension - cra)
+
+  // Progressive monthly PAYE Tax brackets (Annual brackets divided by 12)
+  let payeTax = 0
+  let rem = taxableIncome
+  const brackets: [number, number][] = [
+    [25000, 0.07],    // First ₦300k/yr -> ₦25k/mo @ 7%
+    [25000, 0.11],    // Next ₦300k/yr -> ₦25k/mo @ 11%
+    [41666.67, 0.15], // Next ₦500k/yr -> ₦41,667/mo @ 15%
+    [41666.67, 0.19], // Next ₦500k/yr -> ₦41,667/mo @ 19%
+    [133333.33, 0.21],// Next ₦1.6m/yr -> ₦133,333/mo @ 21%
+    [Infinity, 0.24], // Above ₦3.2m/yr @ 24%
+  ]
+
+  for (const [limit, rate] of brackets) {
+    if (rem <= 0) break
+    const chunk = Math.min(rem, limit)
+    payeTax += chunk * rate
+    rem -= chunk
+  }
+
+  // Minimum Tax: 1% of Gross if calculated tax is lower
+  const minimumTax = Math.round(gross * 0.01)
+  payeTax = Math.round(Math.max(payeTax, minimumTax))
+
+  const totalDeductions = employeePension + payeTax
+  const netSalary = Math.max(0, gross - totalDeductions)
+
+  return {
+    grossSalary: gross,
+    employeePension,
+    employerPension,
+    payeTax,
+    totalDeductions,
+    netSalary,
+  }
+}
+
+/**
+ * Generate itemized payslips for all employees in a specific payroll run
+ */
+export function generatePayslips(s: State, runId: string): EmployeePayslip[] {
+  const run = s.payroll.find((p) => p.id === runId)
+  if (!run || run.status !== 'Approved') return []
+  if (!run.rulesVersion) return []
+  const employees = run.inputs
+
+  return employees.map((emp) => {
+    const calc = calculateStatutoryPayroll(emp.amount, run.rulesVersion)
+    return {
+      id: `slip-${run.id}-${emp.id}`,
+      employeeId: emp.id,
+      employeeName: emp.name,
+      department: emp.department,
+      period: run.period,
+      grossPay: calc.grossSalary,
+      employeePension: calc.employeePension,
+      employerPension: calc.employerPension,
+      payeTax: calc.payeTax,
+      totalDeductions: calc.totalDeductions,
+      netPay: calc.netSalary,
+      currency: s.currency,
+    }
+  })
+}
+
 export const textValue = z.string().trim().min(1).max(200)
 const numericInput=z.union([z.number(),z.string().trim().min(1)]).transform(Number)
 const amount=numericInput.pipe(z.number().finite().positive().max(1e12).refine(n=>Math.abs(n*100-Math.round(n*100))<0.001,'Use at most two decimal places.'))
@@ -286,6 +424,16 @@ export function transition(state: State, action: Action): State {
         'Payroll payable',
       )
     }
+    if (collection === 'payroll') {
+      const run = s.payroll.find(item => item.id === r.id)!
+      if (run.rulesVersion) {
+        const totals=run.inputs.map(emp=>calculateStatutoryPayroll(emp.amount,run.rulesVersion))
+        const pension=roundMoney(totals.reduce((n,p)=>n+p.employeePension,0)), tax=roundMoney(totals.reduce((n,p)=>n+p.payeTax,0)), employer=roundMoney(totals.reduce((n,p)=>n+p.employerPension,0))
+        if(pension) post(pension,'Payroll payable','Pension payable')
+        if(tax) post(tax,'Payroll payable','Tax payable')
+        if(employer) post(employer,'Payroll expense','Pension payable')
+      }
+    }
     r.status = value
   } else if(action.type==='stock_adjust'||action.type==='stock_count'){
     const reason=z.string().trim().min(3,'Add a reason with at least 3 characters.').max(500)
@@ -314,6 +462,7 @@ export function transition(state: State, action: Action): State {
       status: 'Draft',
       amount: s.employees.reduce((a, e) => a + e.amount, 0),
       inputs: structuredClone(s.employees),
+      rulesVersion: action.period! >= '2026-01' ? 'NG-2026-v1' : 'NG-PITA-legacy-v1',
       preparedBy: action.actor || 'Local workspace owner',
       preparedAt: date,
     })

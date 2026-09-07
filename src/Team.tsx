@@ -154,7 +154,7 @@ export function Team({ csrf }: { csrf: string }) {
         <label>
           Role
           <select name="role" defaultValue="employee">
-            {userRoles.filter((role) => role !== 'owner').map((role) => (
+            {userRoles.filter((role) => role !== 'owner' && role !== 'super_admin').map((role) => (
               <option key={role} value={role}>
                 {role.replaceAll('_', ' ')}
               </option>

@@ -1,3 +1,11 @@
+import { BillingPanel } from './BillingPanel'
+import { WarehouseTransfers } from './WarehouseTransfers'
+import { includesFeature, pageFeature } from './entitlements'
+import { Payslips } from './Payslips'
+import { FinancialStatements } from './FinancialStatements'
+import { Customers } from './Customers'
+import { OperationsPanel } from './OperationsPanel'
+import { operations } from './operations'
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { canPerformAction, userRoles, roleMatrix, type Audit, type UserRole } from './types'
 import type {
@@ -499,7 +507,7 @@ function App({
     }
   }, [page, remote])
   useEffect(() => {
-    if (!remote || !['support', 'tax', 'warehouse', 'supply'].includes(page)) return
+    if (!remote || !includesFeature(remote.entitlements, pageFeature(page)) || !['support', 'tax', 'warehouse', 'supply'].includes(page)) return
     let active = true
     const path = page === 'support'
       ? '/support/tickets'
@@ -525,7 +533,7 @@ function App({
     }
   }, [page, remote])
   useEffect(() => {
-    if (!remote || page !== 'hr' || !['owner', 'hr_admin', 'auditor'].includes(remote.user.role)) return
+    if (!remote || !includesFeature(remote.entitlements, 'operations') || page !== 'hr' || !['owner', 'hr_admin', 'auditor'].includes(remote.user.role)) return
     let active = true
     const approvedRuns = s.payroll.filter((run) => run.status === 'Approved')
     Promise.all(approvedRuns.map(async (run) => {
@@ -558,7 +566,7 @@ function App({
     }
   }, [page, remote])
   useEffect(() => {
-    if (!remote || !previewConfigs[page] || ['documents', 'support', 'tax', 'warehouse', 'supply'].includes(page)) return
+    if (!remote || !includesFeature(remote.entitlements, pageFeature(page)) || !previewConfigs[page] || ['documents', 'support', 'tax', 'warehouse', 'supply', 'billing'].includes(page)) return
     let active = true
     const query = search.trim() ? `?q=${encodeURIComponent(search.trim())}` : ''
     request<{ records: ModuleRecord[] }>(`/modules/${page}${query}`)
@@ -816,6 +824,7 @@ function App({
     frontoffice: ['Front desk and visitor experience.', 'Appointments, check-ins, meeting rooms, and customer inquiries.'],
   }
   const canViewPage = (id: string, role: UserRole) => {
+    if (remote && !includesFeature(remote.entitlements, pageFeature(id))) return false
     if (role === 'owner' || role === 'auditor') return id !== 'admin'
     if (role === 'super_admin') {
       return ['admin', 'dashboard', 'settings', 'compliance'].includes(id)
@@ -851,7 +860,7 @@ function App({
   }
   const visiblePages = pages.filter(([id]) => canViewPage(id, effectiveRole))
   const current = titles[page] && canViewPage(page, effectiveRole) ? page : 'dashboard'
-  const preview = previewConfigs[current]
+  const preview = remote && current === 'billing' ? undefined : previewConfigs[current]
   const primaryRecords: ModuleRecord[] = remote && moduleLoaded
     ? current === 'documents'
       ? documents.map((document) => ({
@@ -1449,6 +1458,9 @@ function App({
                 </span>
               </div>
             )}
+          {current === 'billing' && remote && <BillingPanel />}
+          {current === 'finance' && (!remote || includesFeature(remote.entitlements, 'reports')) && <FinancialStatements state={s} connected={Boolean(remote)} />}
+          {remote && titles[page] && !includesFeature(remote.entitlements, pageFeature(page)) && <p className="notice" role="status">Your {remote.entitlements?.plan.replaceAll('_', ' ') || 'current'} plan does not include this workspace. Contact your workspace administrator to review access.</p>}
           {current === 'finance' && (
             <>
               {stats([
@@ -2029,6 +2041,7 @@ function App({
               ),
               add('orders'),
             )}
+          {current === 'hr' && <Payslips state={s} />}
           {current === 'hr' && (
             <>
               {section(
@@ -2526,7 +2539,11 @@ function App({
           {current === 'admin' && (
             <AdminConsole currentRole={effectiveRole} />
           )}
-          {preview && (
+          {current === 'warehouse' && <WarehouseTransfers remote={remote} />}
+          {operations[current] && <OperationsPanel key={current} module={current} remote={remote} />}
+          {current === 'crm' && <Customers remote={remote} />}
+          {current === 'crm' && <OperationsPanel module="campaigns" remote={remote} />}
+          {preview && !operations[current] && (
             <>
               <div className="notice preview-notice">
                 {remote

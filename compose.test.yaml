@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: test_admin_only
     ports:
-      - "127.0.0.1:55432:5432"
+      - "127.0.0.1::5432"
     tmpfs:
       - /var/lib/postgresql/data
     volumes:
@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7.4-alpine
     ports:
-      - "127.0.0.1:56379:6379"
+      - "127.0.0.1::6379"
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

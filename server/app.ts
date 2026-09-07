@@ -1,3 +1,8 @@
+import { customerInput, customerUpdate, interactionInput } from './customers.ts'
+import { reportingPeriod, periodState } from '../src/reporting.ts'
+import {validateProductionUpdate, depreciation} from './operational-rules.ts'
+import {requiredFeature, actionFeature} from './entitlements.ts'
+import { webhookBinding, verifyBankSignature, normalizeBankEvent } from './bank-webhooks.ts'
 import {
   createServer,
   type IncomingMessage,
@@ -17,7 +22,15 @@ import { createClient } from 'redis'
 import { z } from 'zod'
 import type { PoolClient } from 'pg'
 import { Store } from './store.ts'
-import { metrics, seed, transition } from '../src/domain.ts'
+import {
+  metrics,
+  seed,
+  transition,
+  generateIncomeStatement,
+  generateBalanceSheet,
+  generateCashFlowStatement,
+  generatePayslips,
+} from '../src/domain.ts'
 import { hydrateInventory } from '../src/inventory.ts'
 import {
   userRoles,
@@ -94,7 +107,7 @@ async function matches(value: string, stored: string) {
     Buffer.from(h, 'hex'),
   )
 }
-async function body(req: IncomingMessage): Promise<unknown> {
+async function rawBody(req: IncomingMessage): Promise<Buffer> {
   if (!req.headers['content-type']?.startsWith('application/json'))
     fail(415, 'Send JSON data.')
   const chunks: Buffer[] = []
@@ -104,8 +117,12 @@ async function body(req: IncomingMessage): Promise<unknown> {
     if (size > 32768) fail(413, 'Request too large.')
     chunks.push(chunk)
   }
+  return Buffer.concat(chunks)
+}
+async function body(req: IncomingMessage): Promise<unknown> {
+  const raw = await rawBody(req)
   try {
-    return JSON.parse(Buffer.concat(chunks).toString())
+    return JSON.parse(raw.toString())
   } catch {
     return fail(400, 'Invalid JSON.')
   }
@@ -355,6 +372,12 @@ export async function createApp(config: {
     if (!sessionIsCurrent(s, actor))
       fail(401, 'Session expired. Sign in again.')
   }
+  // User writes hold the workspace lock before checking capacity.
+  async function ensureSeatAvailable(c: PoolClient, tenant: string) {
+    const capacity = (await c.query('SELECT p.seat_limit,(SELECT count(*) FROM users u WHERE u.tenant_id=t.id AND u.active=true)::int AS used FROM tenants t JOIN subscription_plans p ON p.id=t.plan_id WHERE t.id=$1', [tenant])).rows[0]
+    if (!capacity || capacity.used >= capacity.seat_limit)
+      fail(409, 'Your plan has no available seats. Disable an unused account or contact your administrator.')
+  }
   const snap = (s: Session) =>
     store.tenant(s.tenant, async (c) => {
       const snapshot = await store.read(c, s.tenant)
@@ -366,8 +389,10 @@ export async function createApp(config: {
       ).rows[0]
       if (!sessionIsCurrent(s, account))
         fail(401, 'Session expired. Sign in again.')
+      const plan = (await c.query('SELECT p.id,p.features,p.seat_limit FROM tenants t JOIN subscription_plans p ON p.id=t.plan_id WHERE t.id=$1', [s.tenant])).rows[0]
       return {
         ...snapshot,
+        entitlements: { plan: plan.id, features: plan.features, seatLimit: plan.seat_limit },
         state: scopedState(snapshot.state, account.role),
         user: publicUser(account),
         csrf: s.csrf,
@@ -465,7 +490,7 @@ export async function createApp(config: {
       }
       if (req.method === 'GET' && (await sendStatic(res, path))) return
       const mutation = !['GET', 'HEAD'].includes(req.method || '')
-      if (mutation && !config.origins.includes(req.headers.origin || ''))
+      if (mutation && !(req.method === 'POST' && /^\/api\/v1\/webhooks\/banks\/[a-z0-9_-]+$/i.test(path)) && !config.origins.includes(req.headers.origin || ''))
         fail(403, 'Request origin is not allowed.')
       if (
         req.method === 'POST' &&
@@ -591,7 +616,7 @@ export async function createApp(config: {
           )
         }
         const response: { ok: true; developmentToken?: string } = { ok: true }
-        if (token && process.env.RETURN_RESET_TOKEN === 'true')
+        if (token && process.env.RETURN_RESET_TOKEN === 'true' && process.env.NODE_ENV !== 'production')
           response.developmentToken = token
         return send(res, 200, response)
       }
@@ -637,6 +662,34 @@ export async function createApp(config: {
         })
         return send(res, 200, { ok: true })
       }
+      const bankWebhookRoute = path.match(/^\/api\/v1\/webhooks\/banks\/([a-z0-9_-]+)$/i)
+      if (req.method === 'POST' && bankWebhookRoute) {
+        const provider = bankWebhookRoute[1].toLowerCase()
+        if (!['mock','paystack','flutterwave'].includes(provider)) return fail(503,'Provider adapter is not configured.')
+        const bindings = JSON.parse(process.env.BANK_WEBHOOK_BINDINGS || '{}')
+        if (!bindings[provider]) return fail(503,'Provider adapter is not configured.')
+        const binding = webhookBinding.parse(bindings[provider])
+        const raw = await rawBody(req)
+        const header = provider === 'paystack' ? 'x-paystack-signature' : provider === 'flutterwave' ? 'flutterwave-signature' : 'x-businessos-signature'
+        if (!verifyBankSignature(provider,raw,req.headers[header],binding.secret)) return fail(401,'Invalid webhook signature.')
+        let payload: unknown
+        try { payload=JSON.parse(raw.toString()) } catch { return fail(400,'Invalid JSON.') }
+        const event=normalizeBankEvent(provider,payload)
+        if (!event) return send(res,200,{status:'ignored'})
+        const result=await store.tenant(binding.tenantId,async c => {
+          await store.read(c,binding.tenantId,true)
+          const account=(await c.query('SELECT id,currency FROM bank_accounts WHERE id=$1 AND tenant_id=$2 AND provider=$3 AND status=$4',[binding.accountId,binding.tenantId,provider,'active'])).rows[0]
+          if (!account) return fail(404,'Configured bank account is unavailable.')
+          if (account.currency !== event.currency) return fail(400,'Transaction currency does not match bank account.')
+          const existing=(await c.query('SELECT id FROM bank_transactions WHERE bank_account_id=$1 AND external_ref=$2',[binding.accountId,event.id])).rows[0]
+          if (existing) return {status:'duplicate_ignored',transactionId:existing.id}
+          const id=randomUUID()
+          await c.query('INSERT INTO bank_transactions(id,tenant_id,bank_account_id,external_ref,occurred_at,amount,direction,reference,raw_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,binding.tenantId,binding.accountId,event.id,event.occurredAt,event.amount,event.direction,event.reference,payload])
+          await store.append(c,binding.tenantId,{id:randomUUID(),date:new Date().toISOString(),actor:'webhook:'+provider,action:'bank_transaction_received',entity:'bank_transaction',detail:id+' / '+event.id})
+          return {status:'ingested',transactionId:id}
+        })
+        return send(res,200,result)
+      }
       const { key, session: s } = await auth(req)
       if (mutation && req.headers['x-csrf-token'] !== s.csrf)
         fail(403, 'Session verification failed. Reload and try again.')
@@ -661,6 +714,49 @@ export async function createApp(config: {
           dataWindow: 'Current tenant workspace snapshot',
           engine: 'deterministic-rules-v1',
         })
+      }
+      const entitlement = await store.tenant(s.tenant,async c => (await c.query('SELECT p.* FROM tenants t JOIN subscription_plans p ON p.id=t.plan_id WHERE t.id=$1',[s.tenant])).rows[0])
+      const required=requiredFeature(path)
+      if(required && !entitlement?.features.includes(required)) return fail(403,'Your subscription does not include this feature.')
+      if(req.method==='GET' && path==='/api/v1/billing/entitlements') return send(res,200,{plan:entitlement.id,features:entitlement.features,seatLimit:entitlement.seat_limit})
+      if (path === '/api/v1/crm/customers' || path.startsWith('/api/v1/crm/customers/')) {
+        const route = new RegExp('^/api/v1/crm/customers(?:/([^/]+)(?:/(interactions))?)?$').exec(path)
+        if (!route) return fail(404, 'Route not found.')
+        const customerId = route[1] ? z.uuid().parse(route[1]) : undefined
+        const history = route[2] === 'interactions'
+        const write = req.method !== 'GET'
+        if (!(write ? ['owner','sales_crm_user'] : ['owner','sales_crm_user','finance_admin','auditor']).includes(s.user.role))
+          fail(403, 'Your role cannot access this customer workflow.')
+        if (!['GET','POST','PATCH'].includes(req.method || '') ||
+            (req.method === 'PATCH' && (!customerId || history)) ||
+            (req.method === 'POST' && customerId && !history)) fail(405, 'Method not supported.')
+        const input = write ? (history ? interactionInput : req.method === 'PATCH' ? customerUpdate : customerInput).parse(await body(req)) : undefined
+        const result = await store.tenant(s.tenant, async c => {
+          await ensureCurrent(c, s)
+          if (customerId) {
+            const exists = await c.query('SELECT id FROM customers WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[s.tenant,customerId])
+            if (!exists.rowCount) fail(404,'Customer not found.')
+          }
+          if (!write) {
+            if (history) return {interactions:(await c.query('SELECT i.id,i.kind,i.summary,i.occurred_at,i.follow_up_on,i.created_at,u.name AS actor FROM customer_interactions i JOIN users u ON u.id=i.actor_id WHERE i.tenant_id=$1 AND i.customer_id=$2 ORDER BY i.occurred_at DESC,i.id',[s.tenant,customerId])).rows}
+            return {customers:(await c.query('SELECT id,name,email,phone,address,tax_reference,status,version,created_at,updated_at FROM customers WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY name,id',[s.tenant,customerId || null])).rows}
+          }
+          const id = customerId || randomUUID()
+          if (history) {
+            const b = interactionInput.parse(input)
+            await c.query('INSERT INTO customer_interactions(id,tenant_id,customer_id,kind,summary,occurred_at,follow_up_on,actor_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[randomUUID(),s.tenant,id,b.kind,b.summary,b.occurredAt,b.followUpOn,s.user.id])
+          } else if (req.method === 'PATCH') {
+            const b = customerUpdate.parse(input)
+            const updated = await c.query('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4,tax_reference=$5,status=$6,version=version+1,updated_at=now() WHERE tenant_id=$7 AND id=$8 AND version=$9',[b.name,b.email,b.phone,b.address,b.taxReference,b.status,s.tenant,id,b.version])
+            if (!updated.rowCount) fail(409,'Customer changed. Refresh the profile before saving again.')
+          } else {
+            const b = customerInput.parse(input)
+            await c.query('INSERT INTO customers(id,tenant_id,name,email,phone,address,tax_reference,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[id,s.tenant,b.name,b.email,b.phone,b.address,b.taxReference,b.status])
+          }
+          await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:history?'customer_interaction_logged':req.method==='PATCH'?'customer_updated':'customer_created',entity:id,detail:history?'Customer interaction recorded':'Customer profile saved'})
+          return {id}
+        })
+        return send(res,req.method === 'POST'?201:200,result)
       }
       if (req.method === 'POST' && path === '/api/v1/ai/ask') {
         if (['auditor', 'super_admin'].includes(s.user.role))
@@ -827,6 +923,7 @@ export async function createApp(config: {
           if (!accessChangeAllowed(s.user, target))
             fail(403, 'Owner access cannot be changed here.')
           if (target.active === b.active) return
+          if (b.active) await ensureSeatAvailable(c, s.tenant)
           await c.query(
             'UPDATE users SET active=$1,session_version=session_version+1 WHERE id=$2 AND tenant_id=$3',
             [b.active, id, s.tenant],
@@ -860,7 +957,7 @@ export async function createApp(config: {
                 name: text,
                 email,
                 password,
-                role: z.enum(userRoles.filter((role) => role !== 'owner')),
+                role: z.enum(userRoles.filter((role) => role !== 'owner' && role !== 'super_admin')),
               })
               .strict()
               .parse(await body(req)),
@@ -868,6 +965,7 @@ export async function createApp(config: {
           await store.tenant(s.tenant, async (c) => {
             await store.read(c, s.tenant, true)
             await ensureCurrent(c, s)
+            await ensureSeatAvailable(c, s.tenant)
             await c.query(
               'INSERT INTO users(id,tenant_id,email,name,password,role) VALUES($1,$2,$3,$4,$5,$6)',
               [randomUUID(), s.tenant, b.email, b.name, h, b.role],
@@ -884,7 +982,7 @@ export async function createApp(config: {
           return send(res, 201, { ok: true })
         }
       }
-      if (path === '/api/v1/banks/accounts') {
+      if (path === '/api/v1/banks/accounts' || (req.method === 'POST' && path === '/api/v1/banks/connect')) {
         if (!['owner', 'finance_admin', 'auditor'].includes(s.user.role))
           fail(403, 'Your role cannot view bank accounts.')
         if (req.method === 'GET') {
@@ -945,6 +1043,7 @@ export async function createApp(config: {
       if (req.method === 'GET' && path === '/api/v1/finance/export.csv') {
         if (!['owner', 'finance_admin', 'auditor'].includes(s.user.role))
           fail(403, 'Your role cannot export financial reports.')
+        const period = reportingPeriod.parse(Object.fromEntries(new URL(req.url || '/', 'http://localhost').searchParams))
         const csv = await store.tenant(s.tenant, async (c) => {
           const { state } = await store.read(c, s.tenant)
           const cell = (value: unknown) => {
@@ -952,75 +1051,48 @@ export async function createApp(config: {
             const safe = /^[=+\-@]/.test(text) ? "'" + text : text
             return '"' + safe.replaceAll('"', '""') + '"'
           }
+          const statements={income:generateIncomeStatement(state,period),balance:generateBalanceSheet(state,period),cashFlow:generateCashFlowStatement(state,period)}
           const rows: unknown[][] = [
-            [
-              'section',
-              'date',
-              'description',
-              'debit_account',
-              'credit_account',
-              'amount',
-              'status',
-            ],
-            [
-              'summary',
-              '',
-              'Cash position',
-              '',
-              '',
-              state.openingCash +
-                state.invoices
-                  .filter((invoice) => invoice.status === 'Paid')
-                  .reduce((sum, invoice) => sum + invoice.amount, 0) -
-                state.expenses.reduce(
-                  (sum, expense) => sum + expense.amount,
-                  0,
-                ),
-              'calculated',
-            ],
-            [
-              'summary',
-              '',
-              'Open receivables',
-              '',
-              '',
-              state.invoices
-                .filter((invoice) => invoice.status === 'Unpaid')
-                .reduce((sum, invoice) => sum + invoice.amount, 0),
-              'calculated',
-            ],
-            [
-              'summary',
-              '',
-              'Recorded expenses',
-              '',
-              '',
-              state.expenses.reduce((sum, expense) => sum + expense.amount, 0),
-              'calculated',
-            ],
-            ...state.journals.map((journal) => [
-              'journal',
-              journal.date,
-              journal.source,
-              journal.debit,
-              journal.credit,
-              journal.amount,
-              'posted',
-            ]),
+            ['section','date','description','debit_account','credit_account','amount','status'],
+            ['period',period.to || '',period.from || 'Beginning','','','','UTC reporting dates'],
+            ['summary',period.to || '', 'Closing cash','','',statements.cashFlow.closingCash,'posted journals and opening cash'],
+            ['summary',period.to || '', 'Receivables at period end','','',statements.balance.assets.receivables,'posted journals'],
+            ['summary','','Operating expenses in period','','',statements.income.operatingExpenses,'posted journals'],
+            ...periodState(state,period).journals.map(journal=>['journal',journal.date,journal.source,journal.debit,journal.credit,journal.amount,'posted']),
           ]
+          function statementRows(prefix:string,value:unknown) {
+            if(value && typeof value==='object') for(const [key,item] of Object.entries(value)) statementRows(prefix+'.'+key,item)
+            else if(typeof value==='number') rows.push(['statement','',prefix,'','',value,'posted journals'])
+          }
+          statementRows('statement',statements)
           await store.append(c, s.tenant, {
             id: randomUUID(),
             date: new Date().toISOString(),
             actor: s.user.email,
             action: 'finance_report_exported',
             entity: 'finance_report',
-            detail: 'CSV export',
+            detail: JSON.stringify({format:'CSV',period}),
           })
           return (
             rows.map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n'
           )
         })
         return sendCsv(res, 'businessos-finance-report.csv', csv)
+      }
+      if (req.method === 'GET' && path === '/api/v1/finance/statements') {
+        const query = new URL(req.url || '/', 'http://localhost').searchParams
+        const period = reportingPeriod.parse(Object.fromEntries(query))
+        if (!['owner', 'finance_admin', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot view financial statements.')
+        const data = await store.tenant(s.tenant, async (c) => {
+          const { state } = await store.read(c, s.tenant)
+          return {
+            incomeStatement: generateIncomeStatement(state, period),
+            balanceSheet: generateBalanceSheet(state, period),
+            cashFlowStatement: generateCashFlowStatement(state, period),
+          }
+        })
+        return send(res, 200, data)
       }
       if (req.method === 'GET' && path === '/api/v1/audit-logs') {
         if (!['owner', 'auditor'].includes(s.user.role))
@@ -1123,7 +1195,7 @@ export async function createApp(config: {
                   s.tenant,
                   payrollRunId,
                   requestKey,
-                  payroll.amount,
+                  payroll.rulesVersion ? Math.round(generatePayslips(state,payrollRunId).reduce((n,p)=>n+p.netPay,0)*100)/100 : payroll.amount,
                   s.user.id,
                 ],
               )
@@ -1140,6 +1212,23 @@ export async function createApp(config: {
           })
           return send(res, 201, { batch })
         }
+      }
+      const payslipsRoute = path.match(
+        /^\/api\/v1\/hr\/runs\/([0-9a-f-]+)\/payslips$/i,
+      )
+      if (req.method === 'GET' && payslipsRoute) {
+        if (
+          !['owner', 'hr_admin', 'finance_admin', 'auditor'].includes(
+            s.user.role,
+          )
+        )
+          fail(403, 'Your role cannot view employee payslips.')
+        const payrollRunId = z.string().uuid().parse(payslipsRoute[1])
+        const slips = await store.tenant(s.tenant, async (c) => {
+          const { state } = await store.read(c, s.tenant)
+          return generatePayslips(state, payrollRunId)
+        })
+        return send(res, 200, { payslips: slips })
       }
       const bankTransactionRoute = path.match(
         /^\/api\/v1\/banks\/accounts\/([0-9a-f-]+)\/transactions(?:\/([0-9a-f-]+))?$/i,
@@ -1788,6 +1877,485 @@ export async function createApp(config: {
           return send(res, 200, { ok: true })
         }
       }
+
+      // 1. Assets Management (Module 1 & 11)
+      const assetRoute = path.match(/^\/api\/v1\/assets(?:\/([0-9a-f-]+))?$/i)
+      if (assetRoute) {
+        const assetId = assetRoute[1] ? z.string().uuid().parse(assetRoute[1]) : undefined
+        if (req.method === 'GET') {
+          if (!['owner', 'operations_manager', 'finance_admin', 'auditor'].includes(s.user.role))
+            fail(403, 'Your role cannot view capital assets.')
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            const rows = (await c.query(
+              'SELECT id,name,serial_number,category,cost,depreciation_rate,location,status,created_at,updated_at FROM assets WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows
+            return {
+              assets: rows.map((r) => {
+                const elapsedYears = Math.max(0, (Date.now() - new Date(r.created_at).getTime()) / (365.25 * 24 * 3600 * 1000))
+                const {bookValue} = depreciation(Number(r.cost),Number(r.depreciation_rate),elapsedYears)
+                return { ...r, cost: Number(r.cost), depreciation_rate: Number(r.depreciation_rate), book_value: bookValue }
+              })
+            }
+          }))
+        }
+        if (req.method === 'POST' && !assetId) {
+          if (!['owner', 'operations_manager', 'finance_admin'].includes(s.user.role))
+            fail(403, 'Your role cannot register assets.')
+          const b = z.object({
+            name: text,
+            serialNumber: z.string().trim().min(1).max(100),
+            category: z.string().trim().min(1).max(100),
+            cost: z.number().finite().min(0),
+            depreciationRate: z.number().finite().min(0).max(100).default(20),
+            location: z.string().trim().max(100).default('Main Office'),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO assets(id,tenant_id,name,serial_number,category,cost,depreciation_rate,location) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+              [id, s.tenant, b.name, b.serialNumber, b.category, b.cost, b.depreciationRate, b.location]
+            )
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'asset_registered',
+              entity: 'asset',
+              detail: `${b.name} (${b.serialNumber})`,
+            })
+          })
+          return send(res, 201, { id, ...b, status: 'operational' })
+        }
+        if (req.method === 'PATCH' && assetId) {
+          if (!['owner', 'operations_manager', 'finance_admin'].includes(s.user.role))
+            fail(403, 'Your role cannot update assets.')
+          const b = z.object({
+            status: z.enum(['operational', 'maintenance', 'retired']).optional(),
+            location: z.string().trim().max(100).optional(),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const result = await c.query(
+              'UPDATE assets SET status=COALESCE($1,status), location=COALESCE($2,location), updated_at=now() WHERE id=$3 AND tenant_id=$4',
+              [b.status || null, b.location || null, assetId, s.tenant]
+            )
+            if (!result.rowCount) fail(404, 'Asset not found.')
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'asset_updated',
+              entity: 'asset',
+              detail: `${assetId} -> ${b.status || b.location}`,
+            })
+          })
+          return send(res, 200, { ok: true })
+        }
+      }
+
+      // 2. Facilities Work Orders (Module 11)
+      const facilityRoute = path.match(/^\/api\/v1\/facilities\/work-orders(?:\/([0-9a-f-]+))?$/i)
+      if (facilityRoute) {
+        const orderId = facilityRoute[1] ? z.string().uuid().parse(facilityRoute[1]) : undefined
+        if (req.method === 'GET') {
+          if (!['owner', 'operations_manager', 'auditor'].includes(s.user.role))
+            fail(403, 'Your role cannot view facility work orders.')
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            workOrders: (await c.query(
+              'SELECT id,facility_name,equipment,condition,priority,status,description,scheduled_date,created_at,updated_at FROM facilities_work_orders WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows,
+          })))
+        }
+        if (req.method === 'POST' && !orderId) {
+          if (!['owner', 'operations_manager'].includes(s.user.role))
+            fail(403, 'Your role cannot create facility work orders.')
+          const b = z.object({
+            facilityName: text,
+            equipment: text,
+            condition: z.enum(['good', 'fair', 'needs_service', 'critical']),
+            priority: z.enum(['low', 'medium', 'high', 'urgent']),
+            description: z.string().trim().max(500).default(''),
+            scheduledDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO facilities_work_orders(id,tenant_id,facility_name,equipment,condition,priority,description,scheduled_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+              [id, s.tenant, b.facilityName, b.equipment, b.condition, b.priority, b.description, b.scheduledDate]
+            )
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'facility_work_order_created',
+              entity: 'facilities',
+              detail: `${b.facilityName} · ${b.equipment}`,
+            })
+          })
+          return send(res, 201, { id, ...b, status: 'open' })
+        }
+        if (req.method === 'PATCH' && orderId) {
+          if (!['owner', 'operations_manager'].includes(s.user.role))
+            fail(403, 'Your role cannot update facility work orders.')
+          const b = z.object({
+            status: z.enum(['none', 'open', 'in_progress', 'completed']),
+            condition: z.enum(['good', 'fair', 'needs_service', 'critical']).optional(),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const result = await c.query(
+              'UPDATE facilities_work_orders SET status=$1, condition=COALESCE($2,condition), updated_at=now() WHERE id=$3 AND tenant_id=$4',
+              [b.status, b.condition || null, orderId, s.tenant]
+            )
+            if (!result.rowCount) fail(404, 'Work order not found.')
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'facility_work_order_updated',
+              entity: 'facilities',
+              detail: `${orderId} -> ${b.status}`,
+            })
+          })
+          return send(res, 200, { ok: true })
+        }
+      }
+
+      // 3. Production Management & Quality (Module 12)
+      const productionRoute = path.match(/^\/api\/v1\/production\/batches(?:\/([0-9a-f-]+))?$/i)
+      if (productionRoute) {
+        const batchId = productionRoute[1] ? z.string().uuid().parse(productionRoute[1]) : undefined
+        if (req.method === 'GET') {
+          if (!['owner', 'operations_manager', 'auditor'].includes(s.user.role))
+            fail(403, 'Your role cannot view production batches.')
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            batches: (await c.query(
+              'SELECT id,batch_number,product_name,planned_qty,completed_qty,defect_count,status,created_at,updated_at FROM production_batches WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows,
+          })))
+        }
+        if (req.method === 'POST' && !batchId) {
+          if (!['owner', 'operations_manager'].includes(s.user.role))
+            fail(403, 'Your role cannot create production batches.')
+          const b = z.object({
+            batchNumber: text,
+            productName: text,
+            plannedQty: z.number().int().min(1),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO production_batches(id,tenant_id,batch_number,product_name,planned_qty) VALUES($1,$2,$3,$4,$5)',
+              [id, s.tenant, b.batchNumber, b.productName, b.plannedQty]
+            )
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'production_batch_scheduled',
+              entity: 'production',
+              detail: `${b.batchNumber} · ${b.productName}`,
+            })
+          })
+          return send(res, 201, { id, ...b, completedQty: 0, defectCount: 0, status: 'scheduled' })
+        }
+        if (req.method === 'PATCH' && batchId) {
+          if (!['owner', 'operations_manager'].includes(s.user.role))
+            fail(403, 'Your role cannot update production batches.')
+          const b = z.object({
+            completedQty: z.number().int().min(0).optional(),
+            defectCount: z.number().int().min(0).optional(),
+            status: z.enum(['scheduled', 'running', 'qa_check', 'completed']).optional(),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const current=(await c.query('SELECT status,planned_qty,completed_qty,defect_count FROM production_batches WHERE id=$1 AND tenant_id=$2 FOR UPDATE',[batchId,s.tenant])).rows[0]
+            if(!current) return fail(404,'Batch not found.')
+            try { validateProductionUpdate(current,b) } catch(e) { return fail(400,e instanceof Error?e.message:'Invalid production update.') }
+            const result = await c.query(
+              'UPDATE production_batches SET completed_qty=COALESCE($1,completed_qty), defect_count=COALESCE($2,defect_count), status=COALESCE($3,status), updated_at=now() WHERE id=$4 AND tenant_id=$5',
+              [b.completedQty ?? null, b.defectCount ?? null, b.status || null, batchId, s.tenant]
+            )
+            if (!result.rowCount) fail(404, 'Batch not found.')
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'production_batch_updated',
+              entity: 'production',
+              detail: `${batchId} -> ${b.status || 'updated'}`,
+            })
+          })
+          return send(res, 200, { ok: true })
+        }
+      }
+
+      // 4. Front Office & Visitors (Module 8)
+      const visitorRoute = path.match(/^\/api\/v1\/frontoffice\/visitors(?:\/([0-9a-f-]+))?$/i)
+      if (visitorRoute) {
+        if (!["owner","sales_crm_user","department_manager","employee"].includes(s.user.role) && !(req.method === 'GET' && s.user.role === 'auditor')) fail(403, 'Your role cannot access this workflow.')
+        const visitorId = visitorRoute[1] ? z.string().uuid().parse(visitorRoute[1]) : undefined
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            visitors: (await c.query(
+              'SELECT id,visitor_name,host_person,company,purpose,status,check_in_time,check_out_time,created_at,updated_at FROM front_office_visitors WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows,
+          })))
+        }
+        if (req.method === 'POST' && !visitorId) {
+          const b = z.object({
+            visitorName: text,
+            hostPerson: text,
+            company: z.string().trim().max(100).default(''),
+            purpose: text,
+            status: z.enum(['scheduled', 'checked_in']).default('scheduled'),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              `INSERT INTO front_office_visitors(id,tenant_id,visitor_name,host_person,company,purpose,status,check_in_time)
+               VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $7='checked_in' THEN now() ELSE NULL END)`,
+              [id, s.tenant, b.visitorName, b.hostPerson, b.company, b.purpose, b.status]
+            )
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'visitor_logged',
+              entity: 'frontoffice',
+              detail: `${b.visitorName} -> ${b.hostPerson}`,
+            })
+          })
+          return send(res, 201, { id, ...b })
+        }
+        if (req.method === 'PATCH' && visitorId) {
+          const b = z.object({
+            status: z.enum(['scheduled', 'checked_in', 'completed', 'cancelled']),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const result = await c.query(
+              `UPDATE front_office_visitors SET status=$1,
+                check_in_time=CASE WHEN $1='checked_in' AND check_in_time IS NULL THEN now() ELSE check_in_time END,
+                check_out_time=CASE WHEN $1='completed' THEN now() ELSE check_out_time END,
+                updated_at=now()
+               WHERE id=$2 AND tenant_id=$3`,
+              [b.status, visitorId, s.tenant]
+            )
+            if (!result.rowCount) fail(404, 'Visitor record not found.')
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'visitor_status_updated',
+              entity: 'frontoffice',
+              detail: `${visitorId} -> ${b.status}`,
+            })
+          })
+          return send(res, 200, { ok: true })
+        }
+      }
+
+      // 5. Marketing Campaigns & ROI (Module 6)
+      const campaignRoute = path.match(/^\/api\/v1\/marketing\/campaigns(?:\/([0-9a-f-]+))?$/i)
+      if (campaignRoute) {
+        if (!["owner","sales_crm_user"].includes(s.user.role) && !(req.method === 'GET' && s.user.role === 'auditor')) fail(403, 'Your role cannot access this workflow.')
+        const campaignId = campaignRoute[1] ? z.string().uuid().parse(campaignRoute[1]) : undefined
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            const rows = (await c.query(
+              'SELECT id,name,channel,budget,spend,leads_count,revenue_generated,status,created_at,updated_at FROM marketing_campaigns WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows
+            return {
+              campaigns: rows.map((r) => {
+                const spend = Number(r.spend)
+                const revenue = Number(r.revenue_generated)
+                const roi = spend > 0 ? Math.round(((revenue - spend) / spend) * 100) : 0
+                return { ...r, budget: Number(r.budget), spend, leads_count: Number(r.leads_count), revenue_generated: revenue, roi_percent: roi }
+              })
+            }
+          }))
+        }
+        if (req.method === 'POST' && !campaignId) {
+          const b = z.object({
+            name: text,
+            channel: z.enum(['social', 'email', 'search', 'event', 'referral']),
+            budget: z.number().finite().min(0).default(0),
+            spend: z.number().finite().min(0).default(0),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO marketing_campaigns(id,tenant_id,name,channel,budget,spend) VALUES($1,$2,$3,$4,$5,$6)',
+              [id, s.tenant, b.name, b.channel, b.budget, b.spend]
+            )
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'marketing_campaign_created',
+              entity: 'marketing',
+              detail: `${b.name} (${b.channel})`,
+            })
+          })
+          return send(res, 201, { id, ...b, leads_count: 0, revenue_generated: 0, roi_percent: 0, status: 'planning' })
+        }
+        if (req.method === 'PATCH' && campaignId) {
+          const b = z.object({
+            spend: z.number().finite().min(0).optional(),
+            leadsCount: z.number().int().min(0).optional(),
+            revenueGenerated: z.number().finite().min(0).optional(),
+            status: z.enum(['planning', 'active', 'completed', 'paused']).optional(),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const result = await c.query(
+              'UPDATE marketing_campaigns SET spend=COALESCE($1,spend), leads_count=COALESCE($2,leads_count), revenue_generated=COALESCE($3,revenue_generated), status=COALESCE($4,status), updated_at=now() WHERE id=$5 AND tenant_id=$6',
+              [b.spend ?? null, b.leadsCount ?? null, b.revenueGenerated ?? null, b.status || null, campaignId, s.tenant]
+            )
+            if (!result.rowCount) fail(404, 'Campaign not found.')
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'marketing_campaign_updated',
+              entity: 'marketing',
+              detail: `${campaignId} updated`,
+            })
+          })
+          return send(res, 200, { ok: true })
+        }
+      }
+
+      // 6. Compliance & Risk Register (Module 16)
+      const riskRoute = path.match(/^\/api\/v1\/compliance\/risks(?:\/([0-9a-f-]+))?$/i)
+      if (riskRoute) {
+        if (!["owner","finance_admin","operations_manager","hr_admin"].includes(s.user.role) && !(req.method === 'GET' && s.user.role === 'auditor')) fail(403, 'Your role cannot access this workflow.')
+        const riskId = riskRoute[1] ? z.string().uuid().parse(riskRoute[1]) : undefined
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            risks: (await c.query(
+              'SELECT id,title,category,severity,status,mitigation_plan,review_date,created_at,updated_at FROM compliance_risks WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows,
+          })))
+        }
+        if (req.method === 'POST' && !riskId) {
+          const b = z.object({
+            title: text,
+            category: z.enum(['financial', 'operational', 'regulatory', 'security', 'vendor']),
+            severity: z.enum(['low', 'medium', 'high', 'critical']),
+            mitigationPlan: z.string().trim().max(500).default(''),
+            reviewDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO compliance_risks(id,tenant_id,title,category,severity,mitigation_plan,review_date) VALUES($1,$2,$3,$4,$5,$6,$7)',
+              [id, s.tenant, b.title, b.category, b.severity, b.mitigationPlan, b.reviewDate]
+            )
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'compliance_risk_identified',
+              entity: 'compliance',
+              detail: `${b.title} [${b.severity}]`,
+            })
+          })
+          return send(res, 201, { id, ...b, status: 'identified' })
+        }
+        if (req.method === 'PATCH' && riskId) {
+          const b = z.object({
+            status: z.enum(['identified', 'mitigating', 'controlled', 'accepted']),
+            mitigationPlan: z.string().trim().max(500).optional(),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const result = await c.query(
+              'UPDATE compliance_risks SET status=$1, mitigation_plan=COALESCE($2,mitigation_plan), updated_at=now() WHERE id=$3 AND tenant_id=$4',
+              [b.status, b.mitigationPlan || null, riskId, s.tenant]
+            )
+            if (!result.rowCount) fail(404, 'Risk record not found.')
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'compliance_risk_updated',
+              entity: 'compliance',
+              detail: `${riskId} -> ${b.status}`,
+            })
+          })
+          return send(res, 200, { ok: true })
+        }
+      }
+
+      // 7. Warehouse Stock Transfers (Module 17)
+      if (path === '/api/v1/warehouse/transfers') {
+        if (!['owner', 'operations_manager', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot view stock transfers.')
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            transfers: (await c.query(
+              'SELECT id,source_location_id,destination_location_id,product_id,product_name,quantity,status,transferred_at,created_at FROM stock_transfers WHERE tenant_id=$1 ORDER BY created_at DESC',
+              [s.tenant]
+            )).rows,
+          })))
+        }
+        if (req.method === 'POST') {
+          if (!['owner', 'operations_manager'].includes(s.user.role))
+            fail(403, 'Your role cannot execute stock transfers.')
+          const b = z.object({
+            sourceLocationId: z.string().uuid().nullable().default(null),
+            destinationLocationId: z.string().uuid(),
+            productId: text,
+            quantity: z.number().int().min(1),
+          }).strict().parse(await body(req))
+
+          const requestKey=z.string().uuid().parse(req.headers['idempotency-key'])
+          const transfer = await store.tenant(s.tenant, async (c) => {
+            const { state } = await store.read(c, s.tenant, true)
+            const prior=(await c.query('SELECT * FROM stock_transfers WHERE tenant_id=$1 AND request_key=$2',[s.tenant,requestKey])).rows[0]
+            if(prior) {
+              if(prior.source_location_id!==b.sourceLocationId || prior.destination_location_id!==b.destinationLocationId || prior.product_id!==b.productId || prior.quantity!==b.quantity) return fail(409,'Idempotency key was used for a different transfer.')
+              return {id:prior.id,productName:prior.product_name,quantity:prior.quantity,status:prior.status}
+            }
+            const product = state.products.find((p) => p.id === b.productId)
+            if (!product) return fail(404, 'Product not found.')
+            if (product.qty < b.quantity)
+              fail(400, `Insufficient stock (${product.qty} available, requested ${b.quantity}).`)
+
+            if (b.sourceLocationId === b.destinationLocationId) return fail(400,'Choose different source and destination locations.')
+            for (const location of [b.sourceLocationId,b.destinationLocationId].filter(Boolean)) {
+              if (!(await c.query('SELECT id FROM warehouse_locations WHERE id=$1 AND tenant_id=$2 AND status=$3',[location,s.tenant,'active'])).rowCount) return fail(404,'Warehouse location not found.')
+            }
+            const allocations=(await c.query('SELECT location_id,quantity FROM warehouse_stock WHERE tenant_id=$1 AND product_id=$2',[s.tenant,b.productId])).rows
+            const available=b.sourceLocationId ? Number(allocations.find(row=>row.location_id===b.sourceLocationId)?.quantity || 0) : product.qty-allocations.reduce((n,row)=>n+Number(row.quantity),0)
+            if (available < b.quantity) return fail(400,'Insufficient stock at the source location.')
+            if (b.sourceLocationId) await c.query('UPDATE warehouse_stock SET quantity=quantity-$1 WHERE tenant_id=$2 AND location_id=$3 AND product_id=$4',[b.quantity,s.tenant,b.sourceLocationId,b.productId])
+            await c.query('INSERT INTO warehouse_stock(tenant_id,location_id,product_id,quantity) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id,location_id,product_id) DO UPDATE SET quantity=warehouse_stock.quantity+EXCLUDED.quantity',[s.tenant,b.destinationLocationId,b.productId,b.quantity])
+            const id = randomUUID()
+            await c.query(
+              'INSERT INTO stock_transfers(id,tenant_id,source_location_id,destination_location_id,product_id,product_name,quantity,request_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+              [id, s.tenant, b.sourceLocationId, b.destinationLocationId, b.productId, product.name, b.quantity, requestKey]
+            )
+
+            for (const [location,delta] of [[b.sourceLocationId,-b.quantity],[b.destinationLocationId,b.quantity]]) await c.query('INSERT INTO warehouse_movements(id,tenant_id,transfer_id,location_id,product_id,quantity_delta) VALUES($1,$2,$3,$4,$5,$6)',[randomUUID(),s.tenant,id,location,b.productId,delta])
+            await store.append(c, s.tenant, {
+              id: randomUUID(),
+              date: new Date().toISOString(),
+              actor: s.user.email,
+              action: 'warehouse_stock_transferred',
+              entity: 'warehouse',
+              detail: `${b.quantity}x ${product.name}`,
+            })
+
+            return { id, productName: product.name, quantity: b.quantity, status: 'completed' }
+          })
+
+          return send(res, 201, transfer)
+        }
+      }
+
       const moduleRoute = path.match(
         /^\/api\/v1\/modules\/([a-z-]+)(?:\/([0-9a-f-]+))?$/i,
       )
@@ -1945,75 +2513,19 @@ export async function createApp(config: {
         )
       }
       if (path === '/api/v1/admin/plans') {
-        if (s.user.role !== 'super_admin')
-          fail(403, 'Admin privileges required.')
-        return send(res, 200, {
-          plans: [
-            {
-              id: 'starter',
-              name: 'Starter',
-              price: 'NGN 45,000 / mo',
-              description:
-                'Core finance, CRM, inventory, documents and standard dashboards for early stage operations.',
-              features: [
-                'Core Finance & Invoices',
-                'CRM & Leads',
-                'Inventory & Stock Alerts',
-                'Document Vault',
-                'Dashboard Analytics',
-              ],
-              limits: 'Up to 5 team seats, 1,000 inventory items',
-            },
-            {
-              id: 'business',
-              name: 'Business',
-              price: 'NGN 120,000 / mo',
-              description:
-                'For growing companies needing HR & payroll, procurement, projects, and warehouse management.',
-              features: [
-                'Everything in Starter',
-                'HR & Gross Payroll',
-                'Procurement & PO Workflows',
-                'Projects & Milestones',
-                'Warehouse & Fulfillment',
-                'Advanced Financial Reports',
-              ],
-              limits: 'Up to 25 team seats, 10,000 inventory items',
-            },
-            {
-              id: 'business_pro',
-              name: 'Business Pro',
-              price: 'NGN 280,000 / mo',
-              description:
-                'Multi-branch operations, automations, and AI forecasting & anomaly detection.',
-              features: [
-                'Everything in Business',
-                'Multi-branch & Warehouses',
-                'Workflow Automations',
-                'AI Cash & Demand Forecasting',
-                'AI Anomaly Detection',
-                'Custom Permission Rules',
-              ],
-              limits: 'Up to 100 team seats, unlimited inventory',
-            },
-            {
-              id: 'enterprise',
-              name: 'Enterprise',
-              price: 'Custom quote',
-              description:
-                'Complex organizations requiring SSO, custom integrations, high API limits, and dedicated SLA.',
-              features: [
-                'Everything in Business Pro',
-                'SSO / SAML 2.0',
-                'Dedicated Account Manager',
-                'Custom ERP/Bank Integrations',
-                '99.9% Uptime SLA',
-                'Audit Compliance Package',
-              ],
-              limits: 'Unlimited seats, custom infrastructure',
-            },
-          ],
-        })
+        if(s.user.role!=='super_admin') return fail(403,'Admin privileges required.')
+        if(req.method==='GET') {
+          const rows=(await store.pool.query('SELECT * FROM subscription_plans ORDER BY seat_limit')).rows
+          return send(res,200,{plans:rows.map(p=>({...p,description:'Server-enforced subscription features',limits:'Up to '+p.seat_limit+' seats'}))})
+        }
+        if(req.method==='PATCH') {
+          const b=z.object({id:z.enum(['starter','business','business_pro','enterprise']),price:text,features:z.array(z.enum(['core','operations','reports','automation','forecast'])).min(1),seatLimit:z.number().int().min(1).max(100000)}).strict().parse(await body(req))
+          await store.tenant(s.tenant,async c=>{
+            await c.query('UPDATE subscription_plans SET price=$1,features=$2,seat_limit=$3 WHERE id=$4',[b.price,b.features,b.seatLimit,b.id])
+            await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'subscription_plan_updated',entity:'plan',detail:JSON.stringify(b)})
+          })
+          return send(res,200,{ok:true})
+        }
       }
       if (path === '/api/v1/admin/integrations') {
         if (s.user.role !== 'super_admin')
@@ -2088,6 +2600,8 @@ export async function createApp(config: {
               409,
               'Workspace changed in another session. Refresh and review before saving again.',
             )
+          const needed=actionFeature(b.action as {type?:string;collection?:string})
+          if(needed && !entitlement.features.includes(needed)) return fail(403,'Your subscription does not include this workflow.')
           let next
           try {
             next = transition(current.state, {
@@ -2098,6 +2612,8 @@ export async function createApp(config: {
           } catch (e) {
             return fail(400, e instanceof Error ? e.message : 'Invalid action.')
           }
+          const allocated=(await c.query('SELECT product_id,SUM(quantity) AS quantity FROM warehouse_stock WHERE tenant_id=$1 GROUP BY product_id',[s.tenant])).rows
+          for(const row of allocated) if((next.products.find(p=>p.id===row.product_id)?.qty || 0)<Number(row.quantity)) return fail(400,'Stock adjustment would reduce total stock below allocated warehouse quantities.')
           for (const m of next.stockMovements.slice(
             0,
             next.stockMovements.length - current.state.stockMovements.length,
@@ -2131,6 +2647,7 @@ export async function createApp(config: {
           state: scopedState(result.state, s.user.role),
           user: s.user,
           csrf: s.csrf,
+          entitlements: { plan: entitlement.id, features: entitlement.features, seatLimit: entitlement.seat_limit },
         } satisfies Snapshot)
       }
       fail(404, 'Endpoint not found.')

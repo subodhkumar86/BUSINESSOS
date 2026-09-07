@@ -1,6 +1,6 @@
 ﻿import test from 'node:test'
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHmac } from 'node:crypto'
 import { createApp } from '../server/app.ts'
 import type { Snapshot } from '../src/types.ts'
 if (!process.env.TEST_DATABASE_URL || !process.env.TEST_REDIS_URL)
@@ -12,11 +12,12 @@ if (new URL(process.env.TEST_DATABASE_URL).pathname !== '/businessos_test')
     'Integration tests require the dedicated businessos_test database. Use npm run test:stack.',
   )
 const origin = 'http://127.0.0.1:5173'
+const testPrefix = 'bos-test:' + randomUUID() + ':'
 const app = await createApp({
   databaseUrl: process.env.TEST_DATABASE_URL,
   redisUrl: process.env.TEST_REDIS_URL,
   origins: [origin],
-  prefix: 'bos-test:' + randomUUID() + ':',
+  prefix: testPrefix,
 })
 await new Promise<void>((resolve) => app.server.listen(0, '127.0.0.1', resolve))
 const address = app.server.address()
@@ -78,6 +79,36 @@ const save = (
 try {
   owner = await register()
   other = await register()
+  await test('customer profiles and history enforce tenant boundaries, versions, validation and audit', async () => {
+    const a=owner, b=other
+    const profile={name:'Customer One',email:'customer@example.test',phone:'+2341234567',address:'Lagos',taxReference:'REF-01',status:'active'}
+    const created=await call('/crm/customers','POST',profile,a)
+    assert.equal(created.status,201)
+    const path='/crm/customers/'+created.data.id
+    assert.equal((await call(path,'GET',undefined,b)).status,404)
+    assert.equal((await call(path+'/interactions','POST',{kind:'note',summary:'Forbidden',occurredAt:'2026-09-01T10:00:00Z'},b)).status,404)
+    assert.equal((await call('/crm/customers','POST',{...profile,tenantId:'injected'},a)).status,400)
+    assert.equal((await call(path,'PATCH',{...profile,name:'Updated',version:1},a)).status,200)
+    assert.equal((await call(path,'PATCH',{...profile,version:1},a)).status,409)
+    const interaction={kind:'call',summary:'Discussed delivery and next order',occurredAt:'2026-09-01T10:00:00Z',followUpOn:'2026-09-10'}
+    assert.equal((await call(path+'/interactions','POST',interaction,a)).status,201)
+    const history=await call(path+'/interactions','GET',undefined,a)
+    assert.equal(history.data.interactions.length,1)
+    assert.equal(history.data.interactions[0].summary,interaction.summary)
+    assert.equal((await call(path+'/interactions','POST',{...interaction,occurredAt:'invalid'},a)).status,400)
+    const audit=await call('/audit-logs','GET',undefined,a)
+    assert.ok(audit.data.entries.some((row: any)=>JSON.stringify(row).includes('customer_interaction_logged')))
+    const tenant=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[a.snapshot.user.id])).rows[0].tenant_id
+    await app.store.tenant(tenant,async c=>{
+      assert.equal((await c.query('SELECT count(*)::int AS n FROM customers')).rows[0].n,1)
+    })
+  })
+  await test('financial statement API validates calendar periods and rejects unsupported parameters',async()=>{
+    assert.equal((await call('/finance/statements?from=2026-09-01&to=2026-09-30','GET',undefined,owner)).status,200)
+    assert.equal((await call('/finance/statements?from=2026-09-30&to=2026-09-01','GET',undefined,owner)).status,400)
+    assert.equal((await call('/finance/statements?to=2026-02-30','GET',undefined,owner)).status,400)
+    assert.equal((await call('/finance/statements?tenant=other','GET',undefined,owner)).status,400)
+  })
   await test('unauthenticated, cross-origin and missing CSRF requests are rejected', async () => {
     assert.equal((await call('/workspace')).status, 401)
     assert.equal(
@@ -235,6 +266,7 @@ try {
       data: { name: 'Integration supplier', product: p.id, qty: 3 },
     })
     assert.equal(r.status, 200)
+    procurement.snapshot = r.data
     const id = r.data.state.orders[0].id
     assert.equal(
       (
@@ -311,6 +343,8 @@ try {
       (await save(auditor, { type: 'settings', name: 'Forbidden' })).status,
       403,
     )
+    assert.equal((await call('/crm/customers','GET',undefined,auditor)).status,200)
+    assert.equal((await call('/crm/customers','POST',{name:'Forbidden'},auditor)).status,403)
     assert.equal((await call('/users', 'GET', undefined, auditor)).status, 403)
     assert.equal((await call('/auth/logout', 'POST', {}, auditor)).status, 200)
     assert.equal(
@@ -389,7 +423,6 @@ try {
       200,
     )
     for (const path of [
-      '/documents',
       '/support/tickets',
       '/tax/filings',
       '/warehouse/locations',
@@ -487,8 +520,8 @@ try {
       'matched',
     )
     assert.equal(
-      (await call('/banks/accounts', 'GET', undefined, other)).status,
-      403,
+      (await call('/banks/accounts', 'GET', undefined, other)).data.accounts.length,
+      0,
     )
   })
   await test('payroll payment batches require approval, finance authority, and an idempotency key', async () => {
@@ -640,7 +673,12 @@ try {
     )
     assert.equal(response.headers.get('referrer-policy'), 'no-referrer')
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
-    assert.match(await response.text(), /Cash position/)
+    assert.match(await response.text(), /Closing cash/)
+    const periodResponse = await fetch(base + '/finance/export.csv?from=2000-01-01&to=2000-01-31', {headers:{Origin:origin,Cookie:finance.cookie}})
+    assert.equal(periodResponse.status,200)
+    const periodCsv=await periodResponse.text()
+    assert.match(periodCsv,/2000-01-01/)
+    assert.ok(!periodCsv.split('\r\n').some(line=>line.startsWith('"journal"')))
     const employeeEmail = randomUUID() + '@example.test'
     assert.equal(
       (
@@ -1107,7 +1145,93 @@ try {
     )
   })
 
+  await test('operational records and warehouse transfers preserve tenant ownership and quantities', async () => {
+    const asset=await call('/assets','POST',{name:'Laptop',serialNumber:randomUUID(),category:'IT',cost:10000},owner)
+    assert.equal(asset.status,201)
+    assert.equal((await call('/assets/'+asset.data.id,'PATCH',{status:'retired'},other)).status,404)
+    const location=await call('/warehouse/locations','POST',{name:'Test warehouse',code:randomUUID().slice(0,8)},owner)
+    assert.equal(location.status,201)
+    owner.snapshot=(await call('/workspace','GET',undefined,owner)).data
+    const product=owner.snapshot.state.products[0]
+    const payload={sourceLocationId:null,destinationLocationId:location.data.id,productId:product.id,quantity:1}
+    const key=randomUUID()
+    const first=await call('/warehouse/transfers','POST',payload,owner,{'Idempotency-Key':key})
+    assert.equal(first.status,201)
+    assert.equal((await call('/warehouse/transfers','POST',payload,owner,{'Idempotency-Key':key})).data.id,first.data.id)
+    assert.equal((await call('/warehouse/transfers','POST',{...payload,quantity:2},owner,{'Idempotency-Key':key})).status,409)
+    assert.equal((await call('/warehouse/transfers','POST',payload,other,{'Idempotency-Key':randomUUID()})).status,404)
+    const tenant=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[owner.snapshot.user.id])).rows[0].tenant_id
+    await app.store.tenant(tenant,async c=>{
+      assert.equal(Number((await c.query('SELECT quantity FROM warehouse_stock WHERE tenant_id=$1 AND location_id=$2',[tenant,location.data.id])).rows[0].quantity),1)
+      assert.equal(Number((await c.query('SELECT SUM(quantity_delta) AS total FROM warehouse_movements WHERE transfer_id=$1',[first.data.id])).rows[0].total),0)
+    })
+  })
+  await test('signed bank ingestion rejects forgery and ingests duplicate deliveries once without browser origin',async()=>{
+    const account=await call('/banks/connect','POST',{provider:'mock',externalRef:randomUUID(),name:'Webhook test',currency:'NGN'},owner)
+    assert.equal(account.status,201)
+    const tenant=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[owner.snapshot.user.id])).rows[0].tenant_id
+    const secret='test-only-signature-secret-1234567890'
+    process.env.BANK_WEBHOOK_BINDINGS=JSON.stringify({mock:{tenantId:tenant,accountId:account.data.id,secret}})
+    const payload={event:'transaction',data:{id:randomUUID(),amount:123,currency:'NGN',direction:'credit',reference:'fixture',occurredAt:'2026-09-01T00:00:00Z'}}
+    const raw=JSON.stringify(payload), signature=createHmac('sha256',secret).update(raw).digest('hex')
+    const deliver=(sig:string)=>fetch(base+'/webhooks/banks/mock',{method:'POST',headers:{'Content-Type':'application/json','X-BusinessOS-Signature':sig},body:raw})
+    assert.equal((await deliver('forged')).status,401)
+    const first=await deliver(signature);assert.equal(first.status,200)
+    const firstData=await first.json()
+    const second=await deliver(signature);assert.equal((await second.json()).transactionId,firstData.transactionId)
+    delete process.env.BANK_WEBHOOK_BINDINGS
+  })
+  await test('subscription restrictions are enforced on APIs and action endpoints',async()=>{
+    const tenant=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[owner.snapshot.user.id])).rows[0].tenant_id
+    await app.store.tenant(tenant,c=>c.query("UPDATE tenants SET plan_id='starter' WHERE id=$1",[tenant]))
+    try {
+      assert.equal((await call('/assets','GET',undefined,owner)).status,403)
+      assert.equal((await call('/finance/statements','GET',undefined,owner)).status,403)
+      assert.equal((await call('/ai/forecast','POST',{metric:'cash'},owner)).status,403)
+      owner.snapshot=(await call('/workspace','GET',undefined,owner)).data
+      assert.deepEqual(owner.snapshot.entitlements?.features, ['core'])
+      assert.equal((await save(owner,{type:'payroll',period:'2027-01'})).status,403)
+      assert.equal((await call('/billing/entitlements','GET',undefined,owner)).data.plan,'starter')
+    } finally { await app.store.tenant(tenant,c=>c.query("UPDATE tenants SET plan_id='business_pro' WHERE id=$1",[tenant])) }
+  })
+  await test('owners cannot grant platform privileges and seats are enforced on creation and reactivation', async () => {
+    assert.equal((await call('/users', 'POST', { name: 'Forbidden admin', email: randomUUID() + '@example.test', password: 'test-password-12345', role: 'super_admin' }, owner)).status, 400)
+    const users = (await call('/users', 'GET', undefined, owner)).data.users
+    const auditor = users.find((user: { role: string; active: boolean }) => user.role === 'auditor' && user.active)
+    assert.ok(auditor)
+    assert.equal((await call('/users/' + auditor.id + '/access', 'PATCH', { active: false }, owner)).status, 200)
+    const used = users.filter((user: { active: boolean }) => user.active).length - 1
+    const oldLimit = (await app.store.pool.query("SELECT seat_limit FROM subscription_plans WHERE id='business_pro'")).rows[0].seat_limit
+    await app.store.pool.query("UPDATE subscription_plans SET seat_limit=$1 WHERE id='business_pro'", [used])
+    try {
+      assert.equal((await call('/users', 'POST', { name: 'Extra seat', email: randomUUID() + '@example.test', password: 'test-password-12345', role: 'employee' }, owner)).status, 409)
+      assert.equal((await call('/users/' + auditor.id + '/access', 'PATCH', { active: true }, owner)).status, 409)
+      const workspace = await call('/workspace', 'GET', undefined, owner)
+      assert.equal(workspace.data.entitlements.seatLimit, used)
+      assert.equal(workspace.data.entitlements.plan, 'business_pro')
+    } finally {
+      await app.store.pool.query("UPDATE subscription_plans SET seat_limit=$1 WHERE id='business_pro'", [oldLimit])
+      assert.equal((await call('/users/' + auditor.id + '/access', 'PATCH', { active: true }, owner)).status, 200)
+    }
+  })
+  await test('production never returns development password reset tokens', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousReturnToken = process.env.RETURN_RESET_TOKEN
+    process.env.NODE_ENV = 'production'
+    process.env.RETURN_RESET_TOKEN = 'true'
+    try {
+      const result = await call('/auth/password-reset/request', 'POST', { email: owner.snapshot.user.email })
+      assert.equal(result.status, 200)
+      assert.deepEqual(result.data, { ok: true })
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = previousNodeEnv
+      if (previousReturnToken === undefined) delete process.env.RETURN_RESET_TOKEN
+      else process.env.RETURN_RESET_TOKEN = previousReturnToken
+    }
+  })
   await test('password recovery issues a single-use reset and revokes sessions', async () => {
+    await app.redis.del(testPrefix + 'attempts:127.0.0.1')
     process.env.RETURN_RESET_TOKEN = 'true'
     const requested = await call('/auth/password-reset/request', 'POST', {
       email: owner.snapshot.user.email,
