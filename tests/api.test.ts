@@ -1,4 +1,4 @@
-﻿import test from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID, createHmac } from 'node:crypto'
 import { createApp } from '../server/app.ts'
@@ -24,6 +24,8 @@ const address = app.server.address()
 if (!address || typeof address === 'string')
   throw Error('Test server did not bind')
 const base = `http://127.0.0.1:${address.port}/api/v1`
+// Each scenario has its own login-attempt window; production limits remain enabled.
+test.beforeEach(async()=>{await app.redis.del(testPrefix+'attempts:127.0.0.1')})
 interface Account {
   cookie: string
   snapshot: Snapshot
@@ -79,6 +81,236 @@ const save = (
 try {
   owner = await register()
   other = await register()
+  await test('shipment returns enforce inspection and quantity caps and atomically reverse original COGS once',async()=>{
+    const a=await register(),b=await register(),product=a.snapshot.state.products[0]
+    const location=await call('/warehouse/locations','POST',{name:'Returns store',code:'RET'},a)
+    assert.equal(location.status,201)
+    assert.equal((await call('/warehouse/transfers','POST',{productId:product.id,quantity:4,sourceLocationId:null,destinationLocationId:location.data.id},a,{'Idempotency-Key':randomUUID()})).status,201)
+    const shipment=await call('/warehouse/shipments','POST',{orderRef:'SO-RETURN',customer:'Customer',productId:product.id,quantity:4,sourceLocationId:location.data.id},a,{'Idempotency-Key':randomUUID()})
+    assert.equal(shipment.status,201)
+    const payload={shipmentId:shipment.data.id,quantity:3,reason:'Customer return',destinationLocationId:location.data.id}
+    const create=(input:unknown,key=randomUUID(),actor=a)=>call('/warehouse/shipment-returns','POST',input,actor,{'Idempotency-Key':key})
+    const update=(id:string,input:unknown,key=randomUUID(),actor=a)=>call('/warehouse/shipment-returns/'+id,'PATCH',input,actor,{'Idempotency-Key':key})
+    assert.equal((await create(payload)).status,409)
+    await call('/warehouse/shipments/'+shipment.data.id,'PATCH',{version:1,status:'packed'},a,{'Idempotency-Key':randomUUID()})
+    assert.equal((await call('/warehouse/shipments/'+shipment.data.id,'PATCH',{version:2,status:'dispatched'},a,{'Idempotency-Key':randomUUID()})).status,200)
+    assert.equal((await create(payload,randomUUID(),b)).status,404)
+    const competing=await Promise.all([create(payload),create(payload)])
+    assert.deepEqual(competing.map(r=>r.status).sort(),[201,409])
+    const first=competing.find(r=>r.status===201)!
+    assert.equal((await update(first.data.id,{version:1,status:'cancelled'})).status,200)
+    const key=randomUUID(),restock=await create({...payload,quantity:2},key)
+    assert.equal(restock.status,201)
+    assert.equal((await create({...payload,quantity:2},key)).data.id,restock.data.id)
+    assert.equal((await create({...payload,quantity:1},key)).status,409)
+    const damaged=await create({...payload,quantity:2})
+    assert.equal(damaged.status,201)
+    assert.equal((await create({...payload,quantity:1})).status,409)
+    assert.equal((await call('/warehouse/shipment-returns/'+restock.data.id,'GET',undefined,b)).status,404)
+    assert.equal((await update(restock.data.id,{version:1,status:'restocked'})).status,409)
+    assert.equal((await update(restock.data.id,{version:1,status:'inspected',condition:'restockable'})).status,400)
+    assert.equal((await update(restock.data.id,{version:1,status:'inspected',condition:'restockable',inspectionNotes:'Sealed and undamaged'})).status,200)
+    assert.equal((await update(restock.data.id,{version:1,status:'cancelled'})).status,409)
+    const before=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(before.products.find((p:any)=>p.id===product.id).qty,product.qty-4)
+    const restockKey=randomUUID(),posted=await Promise.all([update(restock.data.id,{version:2,status:'restocked'},restockKey),update(restock.data.id,{version:2,status:'restocked'},restockKey)])
+    assert.deepEqual(posted.map(r=>r.status),[200,200])
+    assert.equal(posted[0].data.stock_movement_id,posted[1].data.stock_movement_id)
+    const after=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(after.products.find((p:any)=>p.id===product.id).qty,product.qty-2)
+    assert.equal(after.journals.length,before.journals.length+1)
+    const movement=after.stockMovements.find((m:any)=>m.id===posted[0].data.stock_movement_id)
+    assert.equal(movement.kind,'return');assert.equal(movement.source,restock.data.id);assert.equal(movement.valueDelta,2*product.cost)
+    const journal=after.journals.find((j:any)=>j.source===movement.id)
+    assert.equal(journal.debit,'Inventory');assert.equal(journal.credit,'Cost of goods sold');assert.equal(journal.amount,2*product.cost)
+    const tenantId=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[a.snapshot.user.id])).rows[0].tenant_id
+    await app.store.tenant(tenantId,async c=>{assert.equal(Number((await c.query('SELECT quantity FROM warehouse_stock WHERE tenant_id=$1 AND location_id=$2 AND product_id=$3',[tenantId,location.data.id,product.id])).rows[0].quantity),2)})
+    assert.equal((await update(damaged.data.id,{version:1,status:'inspected',condition:'damaged',inspectionNotes:'Broken casing'})).status,200)
+    assert.equal((await update(damaged.data.id,{version:2,status:'restocked'})).status,409)
+    assert.equal((await update(damaged.data.id,{version:2,status:'closed_damaged'})).status,200)
+    const final=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(final.products.find((p:any)=>p.id===product.id).qty,product.qty-2)
+    assert.equal(final.journals.length,after.journals.length)
+    assert.equal((await update(restock.data.id,{version:3,status:'cancelled'})).status,409)
+    assert.equal((await app.store.pool.query('SELECT * FROM shipment_returns')).rowCount,0)
+    const audit=await call('/audit-logs','GET',undefined,a)
+    assert.ok(audit.data.entries.some((row:any)=>row.action==='shipment_return_restocked'))
+    const email=randomUUID()+'@example.test',password='return-test-password-123'
+    await call('/users','POST',{name:'Return auditor',email,password,role:'auditor'},a)
+    const login=await call('/auth/login','POST',{email,password}),auditor={cookie:login.cookie,snapshot:login.data} as Account
+    assert.equal((await call('/warehouse/shipment-returns','GET',undefined,auditor)).status,200)
+    assert.equal((await create(payload,randomUUID(),auditor)).status,403)
+    assert.equal((await update(restock.data.id,{version:3,status:'cancelled'},randomUUID(),auditor)).status,403)
+  })
+
+  await test('shipments atomically post location stock and COGS with replay, concurrency and tenant protection',async()=>{
+    const a=await register(),b=await register()
+    const product=a.snapshot.state.products[0],initialQty=product.qty
+    const location=await call('/warehouse/locations','POST',{name:'Dispatch warehouse',code:'DSP'},a)
+    assert.equal(location.status,201)
+    const transfer=await call('/warehouse/transfers','POST',{productId:product.id,quantity:4,sourceLocationId:null,destinationLocationId:location.data.id},a,{'Idempotency-Key':randomUUID()})
+    assert.equal(transfer.status,201)
+    const input={orderRef:'SO-INTEGRATED',customer:'Customer',productId:product.id,quantity:3,sourceLocationId:location.data.id}
+    const create=(data:unknown,key=randomUUID(),account=a)=>call('/warehouse/shipments','POST',data,account,{'Idempotency-Key':key})
+    const change=(id:string,version:number,status:string,key=randomUUID(),account=a)=>call('/warehouse/shipments/'+id,'PATCH',{version,status},account,{'Idempotency-Key':key})
+    const createKey=randomUUID(),created=await create(input,createKey)
+    assert.equal(created.status,201)
+    assert.equal((await create(input,createKey)).data.id,created.data.id)
+    assert.equal((await create({...input,quantity:2},createKey)).status,409)
+    assert.equal((await create(input,randomUUID(),b)).status,404)
+    assert.equal((await call('/warehouse/shipments/'+created.data.id,'GET',undefined,b)).status,404)
+    assert.equal((await change(created.data.id,1,'packed',randomUUID(),b)).status,404)
+    assert.equal((await change(created.data.id,1,'dispatched')).status,409)
+    const before=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(before.products.find((p:any)=>p.id===product.id).qty,initialQty)
+    assert.equal((await change(created.data.id,1,'packed')).status,200)
+    assert.equal((await change(created.data.id,1,'cancelled')).status,409)
+    const dispatchKey=randomUUID(),retries=await Promise.all([change(created.data.id,2,'dispatched',dispatchKey),change(created.data.id,2,'dispatched',dispatchKey)])
+    assert.deepEqual(retries.map(result=>result.status),[200,200])
+    assert.equal(retries[0].data.stock_movement_id,retries[1].data.stock_movement_id)
+    const after=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(after.products.find((p:any)=>p.id===product.id).qty,initialQty-3)
+    const movement=after.stockMovements.find((m:any)=>m.id===retries[0].data.stock_movement_id)
+    assert.equal(movement.source,created.data.id)
+    assert.equal(movement.actor,a.snapshot.user.email)
+    assert.equal(movement.valueDelta,-3*product.cost)
+    const journals=after.journals.filter((j:any)=>j.source===movement.id)
+    assert.equal(journals.length,1)
+    assert.equal(journals[0].debit,'Cost of goods sold')
+    assert.equal(journals[0].credit,'Inventory')
+    assert.equal(journals[0].amount,3*product.cost)
+    const second=await create({...input,orderRef:'SO-INSUFFICIENT'})
+    assert.equal((await change(second.data.id,1,'packed')).status,200)
+    assert.equal((await change(second.data.id,2,'dispatched')).status,409)
+    const still=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(still.journals.length,after.journals.length)
+    assert.equal(still.products.find((p:any)=>p.id===product.id).qty,initialQty-3)
+    assert.equal((await call('/warehouse/shipments/'+second.data.id,'GET',undefined,a)).data.shipments[0].status,'packed')
+    const reserved=await create({...input,orderRef:'SO-UNALLOCATED',quantity:initialQty-3,sourceLocationId:null})
+    assert.equal((await change(reserved.data.id,1,'packed')).status,200)
+    assert.equal((await change(reserved.data.id,2,'dispatched')).status,409)
+    assert.equal((await change(created.data.id,3,'cancelled')).status,409)
+    const small=await create({...input,orderRef:'SO-SMALL',quantity:2,sourceLocationId:null})
+    assert.equal((await change(small.data.id,1,'packed')).status,200)
+    assert.equal((await change(small.data.id,2,'dispatched')).status,200)
+    const final=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(final.products.find((p:any)=>p.id===product.id).qty,initialQty-5)
+    assert.equal(final.journals.length,after.journals.length+1)
+    const tenantId=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[a.snapshot.user.id])).rows[0].tenant_id
+    await app.store.tenant(tenantId,async c=>{
+      const balance=(await c.query('SELECT quantity FROM warehouse_stock WHERE tenant_id=$1 AND location_id=$2 AND product_id=$3',[tenantId,location.data.id,product.id])).rows[0]
+      assert.equal(balance.quantity,1)
+    })
+    const contenderA=await create({...input,orderRef:'SO-RACE-A',quantity:1}),contenderB=await create({...input,orderRef:'SO-RACE-B',quantity:1})
+    await change(contenderA.data.id,1,'packed');await change(contenderB.data.id,1,'packed')
+    const concurrent=await Promise.all([change(contenderA.data.id,2,'dispatched'),change(contenderB.data.id,2,'dispatched')])
+    assert.deepEqual(concurrent.map(result=>result.status).sort(),[200,409])
+    const raced=(await call('/workspace','GET',undefined,a)).data.state
+    assert.equal(raced.products.find((p:any)=>p.id===product.id).qty,initialQty-6)
+
+    assert.equal((await app.store.pool.query('SELECT * FROM warehouse_shipments')).rowCount,0)
+    const email=randomUUID()+'@example.test',password='shipment-test-password-123'
+    assert.equal((await call('/users','POST',{name:'Shipment auditor',email,password,role:'auditor'},a)).status,201)
+    const login=await call('/auth/login','POST',{email,password}),auditor={cookie:login.cookie,snapshot:login.data} as Account
+    assert.equal((await call('/warehouse/shipments','GET',undefined,auditor)).status,200)
+    assert.equal((await create(input,randomUUID(),auditor)).status,403)
+    assert.equal((await change(second.data.id,2,'cancelled',randomUUID(),auditor)).status,403)
+  })
+
+
+  await test('platform plan assignment exposes metadata only and enforces administrator access and seat limits',async()=>{
+    const adminOwner=await register(),target=await register()
+    await app.store.pool.query("UPDATE users SET role='super_admin',session_version=session_version+1 WHERE id=$1",[adminOwner.snapshot.user.id])
+    const logged=await call('/auth/login','POST',{email:adminOwner.snapshot.user.email,password:'test-password-12345'})
+    assert.equal(logged.status,200)
+    const admin={cookie:logged.cookie,snapshot:logged.data} as Account
+    assert.equal((await call('/admin/tenants','GET',undefined,target)).status,403)
+    const directory=await call('/admin/tenants','GET',undefined,admin)
+    assert.equal(directory.status,200)
+    const row=directory.data.tenants.find((item:any)=>item.name===target.snapshot.state.organisation)
+    assert.ok(row)
+    assert.deepEqual(Object.keys(row).sort(),['currency','id','name','plan_id','seats'])
+    const path='/admin/tenants/'+row.id+'/plan'
+    assert.equal((await call(path,'PATCH',{planId:'starter',expectedPlanId:'business_pro'},target)).status,403)
+    assert.equal((await call(path,'PATCH',{planId:'starter',expectedPlanId:'business_pro'},admin)).status,200)
+    assert.equal((await call(path,'PATCH',{planId:'enterprise',expectedPlanId:'business_pro'},admin)).status,409)
+    assert.equal((await call('/workspace','GET',undefined,target)).data.entitlements.plan,'starter')
+    assert.equal((await call('/workflows/goals','GET',undefined,target)).status,403)
+    const response=await fetch(base+'/finance/export.xlsx',{headers:{Origin:origin,Cookie:target.cookie}})
+    assert.equal(response.status,403)
+    await app.store.tenant(row.id,async c=>{for(let i=0;i<5;i++)await c.query("INSERT INTO users(id,tenant_id,name,email,password,role) VALUES($1,$2,'Seat',$3,'unused','employee')",[randomUUID(),row.id,randomUUID()+'@example.test'])})
+    assert.equal((await call(path,'PATCH',{planId:'starter',expectedPlanId:'starter'},admin)).status,409)
+    const audit=await call('/audit-logs','GET',undefined,target)
+    assert.ok(audit.data.entries.some((item:any)=>item.action==='tenant_plan_assigned'))
+  })
+  await test('PRD workflows persist, enforce roles and tenants, and reject conflicts and stale approvals', async()=>{
+    const account=await register(),foreign=await register()
+    const employeeId=account.snapshot.state.employees[0].id
+    async function user(role:string){
+      const email=randomUUID()+'@example.test',password='workflow-test-password-123'
+      assert.equal((await call('/users','POST',{name:role,email,password,role},account)).status,201)
+      const result=await call('/auth/login','POST',{email,password})
+      return {cookie:result.cookie,snapshot:result.data} as Account
+    }
+    const hr=await user('hr_admin'),staff=await user('employee'),auditor=await user('auditor')
+    const create=(kind:string,input:unknown,key=randomUUID(),actor=account)=>call('/workflows/'+kind,'POST',input,actor,{'Idempotency-Key':key})
+    const leave={employeeId,startDate:'2026-11-01',endDate:'2026-11-03',reason:'Annual leave'}
+    const key=randomUUID(),created=await create('leave',leave,key)
+    assert.equal(created.status,201)
+    assert.equal((await create('leave',leave,key)).data.id,created.data.id)
+    assert.equal((await create('leave',{...leave,reason:'Changed'},key)).status,409)
+    assert.equal((await create('leave',leave)).status,409)
+    const path='/workflows/leave/'+created.data.id
+    assert.equal((await call(path,'GET',undefined,foreign)).status,404)
+    assert.equal((await call(path,'PATCH',{version:1,status:'approved'},account)).status,403)
+    assert.equal((await call(path,'PATCH',{version:1,status:'approved'},hr)).status,200)
+    assert.equal((await call(path,'PATCH',{version:1,status:'rejected'},hr)).status,409)
+    assert.equal((await call('/workflows/leave','GET',undefined,staff)).status,403)
+    assert.equal((await create('leave',{...leave,employeeId:'foreign'})).status,404)
+    assert.equal((await create('leave',{...leave,startDate:'2026-12-01',endDate:'2026-12-02'},randomUUID(),auditor)).status,403)
+    const appointment={title:'Visit',guest:'Guest',host:'Host',room:'Boardroom',startAt:'2026-11-01T09:00:00Z',endAt:'2026-11-01T10:00:00Z'}
+    const bookings=await Promise.all([create('appointments',appointment),create('appointments',{...appointment,room:'boardroom'})])
+    assert.deepEqual(bookings.map(r=>r.status).sort(),[201,409])
+    assert.equal((await create('appointments',{...appointment,startAt:'2026-11-01T10:00:00Z',endAt:'2026-11-01T11:00:00Z'})).status,201)
+    const goal=await create('goals',{employeeId,title:'Orders shipped',target:10,unit:'orders',dueDate:'2026-12-01'})
+    assert.equal(goal.status,201)
+    assert.equal((await call('/workflows/goals/'+goal.data.id,'PATCH',{version:1,status:'completed'},hr)).status,409)
+    assert.equal((await call('/workflows/goals/'+goal.data.id,'PATCH',{version:1,status:'completed',progress:10},hr)).status,200)
+    const finding=await create('findings',{title:'Safety audit',assignee:'Operations',severity:'high',dueDate:'2026-12-01',correctiveAction:'Repair fire door'})
+    assert.equal(finding.status,201)
+    const findingPath='/workflows/findings/'+finding.data.id
+    assert.equal((await call(findingPath,'PATCH',{version:1,status:'in_progress'},account)).status,200)
+    assert.equal((await call(findingPath,'PATCH',{version:2,status:'closed'},account)).status,409)
+    assert.equal((await call(findingPath,'PATCH',{version:2,status:'closed',evidence:'Repair inspected'},account)).status,200)
+    assert.equal((await create('certifications',{title:'Safety policy',issuer:'Operations',reference:'P1',expiresOn:'2027-01-01'})).status,201)
+    const article=await create('knowledge',{title:'Returns',category:'Support',content:'Contact the support team with your order reference.'})
+    assert.equal(article.status,201)
+    const articlePath='/workflows/knowledge/'+article.data.id
+    assert.equal((await call(articlePath,'GET',undefined,staff)).status,404)
+    assert.equal((await call(articlePath,'PATCH',{version:1,status:'published'},account)).status,200)
+    assert.equal((await call(articlePath,'GET',undefined,staff)).status,200)
+    assert.equal((await call(articlePath,'PATCH',{version:2,status:'archived'},account)).status,200)
+    assert.equal((await call(articlePath,'GET',undefined,staff)).status,404)
+    const logs=await call('/audit-logs','GET',undefined,account)
+    assert.ok(logs.data.entries.some((row:any)=>row.action==='leave_updated'))
+    assert.equal((await call('/workflows/findings','GET',undefined,auditor)).status,200)
+  })
+
+  await test('recruitment isolates tenants, rejects stale and skipped stages, and audits changes', async () => {
+    const created = await call('/hr/candidates','POST',{name:'Candidate',email:'candidate@example.test',position:'Engineer'},owner)
+    assert.equal(created.status,201)
+    const path='/hr/candidates/'+created.data.id
+    assert.equal((await call(path,'PATCH',{version:1,status:'screening'},other)).status,404)
+    const otherList=await call('/hr/candidates','GET',undefined,other)
+    assert.ok(!otherList.data.candidates.some((row:any)=>row.id===created.data.id))
+    assert.equal((await call(path,'PATCH',{version:1,status:'hired'},owner)).status,409)
+    assert.equal((await call(path,'PATCH',{version:1,status:'screening'},owner)).status,200)
+    assert.equal((await call(path,'PATCH',{version:1,status:'interview'},owner)).status,409)
+    assert.equal((await call(path,'PATCH',{version:2,status:'interview'},owner)).status,200)
+    assert.equal((await call('/hr/candidates','POST',{name:'Forged',email:'candidate@example.test',position:'Engineer',tenantId:randomUUID()},owner)).status,400)
+    const logs=await call('/audit-logs','GET',undefined,owner)
+    assert.ok(logs.data.entries.some((row:any)=>JSON.stringify(row).includes('candidate_stage_updated')))
+  })
   await test('customer profiles and history enforce tenant boundaries, versions, validation and audit', async () => {
     const a=owner, b=other
     const profile={name:'Customer One',email:'customer@example.test',phone:'+2341234567',address:'Lagos',taxReference:'REF-01',status:'active'}
@@ -674,6 +906,11 @@ try {
     assert.equal(response.headers.get('referrer-policy'), 'no-referrer')
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
     assert.match(await response.text(), /Closing cash/)
+    const workbookResponse=await fetch(base+'/finance/export.xlsx?from=2000-01-01&to=2000-01-31',{headers:{Origin:origin,Cookie:finance.cookie}})
+    assert.equal(workbookResponse.status,200)
+    assert.match(workbookResponse.headers.get('content-type')||'',/spreadsheetml/)
+    const workbook=Buffer.from(await workbookResponse.arrayBuffer())
+    assert.equal(workbook.readUInt32LE(0),0x04034b50)
     const periodResponse = await fetch(base + '/finance/export.csv?from=2000-01-01&to=2000-01-31', {headers:{Origin:origin,Cookie:finance.cookie}})
     assert.equal(periodResponse.status,200)
     const periodCsv=await periodResponse.text()
@@ -1011,6 +1248,21 @@ try {
     )
   })
 
+  await test('in-app announcements are recipient-scoped, readable once, and tenant-isolated', async () => {
+    const published = await call('/notifications', 'POST', { title: 'Operations update', body: 'Warehouse review starts at 10:00.', link: '/app/warehouse' }, owner)
+    assert.equal(published.status, 201)
+    assert.ok(published.data.delivered >= 1)
+    const listed = await call('/notifications?unread=true', 'GET', undefined, owner)
+    assert.equal(listed.status, 200)
+    const notice = listed.data.notifications.find((item: { title: string }) => item.title === 'Operations update')
+    assert.ok(notice)
+    assert.equal((await call('/notifications?unread=true', 'GET', undefined, other)).data.notifications.some((item: { id: string }) => item.id === notice.id), false)
+    assert.equal((await call('/notifications/' + notice.id + '/read', 'PATCH', {}, other)).status, 404)
+    assert.equal((await call('/notifications/' + notice.id + '/read', 'PATCH', {}, owner)).status, 200)
+    const unread = await call('/notifications?unread=true', 'GET', undefined, owner)
+    assert.equal(unread.data.notifications.some((item: { id: string }) => item.id === notice.id), false)
+  })
+
   await test('document metadata is validated, tenant-scoped, and archived instead of deleted', async () => {
     const created = await call(
       '/documents',
@@ -1039,6 +1291,70 @@ try {
       ).status,
       'archived',
     )
+  })
+
+  await test('document comments are immutable, attributed and tenant-scoped', async () => {
+    const document = await call('/documents', 'POST', { filename: 'review.txt', mimeType: 'text/plain', sizeBytes: 1 }, owner)
+    assert.equal(document.status, 201)
+    const id = document.data.id
+    const comment = await call('/documents/' + id + '/comments', 'POST', { body: 'Please review section 3.' }, owner)
+    assert.equal(comment.status, 201)
+    const listed = await call('/documents/' + id + '/comments', 'GET', undefined, owner)
+    assert.equal(listed.status, 200)
+    assert.equal(listed.data.comments[0].body, 'Please review section 3.')
+    assert.equal((await call('/documents/' + id + '/comments', 'GET', undefined, other)).status, 404)
+    assert.equal((await call('/documents/' + id + '/comments', 'POST', { body: 'cross tenant' }, other)).status, 404)
+  })
+
+  await test('document binaries require authorization and can be shared through an expiring token', async () => {
+    const contents = 'confidential BusinessOS document'
+    const created = await call(
+      '/documents',
+      'POST',
+      {
+        filename: 'confidential.txt',
+        mimeType: 'text/plain',
+        sizeBytes: Buffer.byteLength(contents),
+        contentBase64: Buffer.from(contents).toString('base64'),
+      },
+      owner,
+    )
+    assert.equal(created.status, 201)
+
+    const download = await fetch(base + '/documents/' + created.data.id + '/content', {
+      headers: { Origin: origin, Cookie: owner.cookie, 'X-CSRF-Token': owner.snapshot.csrf },
+    })
+    assert.equal(download.status, 200)
+    assert.equal(download.headers.get('content-type'), 'text/plain')
+    assert.match(download.headers.get('content-disposition') || '', /confidential\.txt/)
+    assert.equal(await download.text(), contents)
+    assert.equal((await call('/documents/' + created.data.id + '/content', 'GET', undefined, other)).status, 404)
+
+    const share = await call('/documents/' + created.data.id + '/shares', 'POST', { expiresHours: 1 }, owner)
+    assert.equal(share.status, 201)
+    assert.match(share.data.token, /^[a-f0-9]{64}$/)
+    const publicDownload = await fetch(base + '/shared-documents/' + share.data.token)
+    assert.equal(publicDownload.status, 200)
+    assert.equal(await publicDownload.text(), contents)
+    assert.equal((await fetch(base + '/shared-documents/' + 'a'.repeat(64))).status, 404)
+  })
+
+  await test('document revisions preserve the previous binary and enforce tenant access', async () => {
+    const first = 'first approved revision'
+    const created = await call('/documents', 'POST', { filename: 'handbook.txt', mimeType: 'text/plain', sizeBytes: Buffer.byteLength(first), contentBase64: Buffer.from(first).toString('base64') }, owner)
+    assert.equal(created.status, 201)
+    const second = 'second approved revision'
+    const revision = await call('/documents/' + created.data.id + '/versions', 'POST', { filename: 'handbook-v2.txt', mimeType: 'text/plain', sizeBytes: Buffer.byteLength(second), contentBase64: Buffer.from(second).toString('base64') }, owner)
+    assert.equal(revision.status, 201)
+    assert.equal(revision.data.version, 2)
+    const history = await call('/documents/' + created.data.id + '/versions', 'GET', undefined, owner)
+    assert.equal(history.status, 200)
+    assert.equal(history.data.current.version, 2)
+    assert.equal(history.data.versions[0].version, 1)
+    const oldFile = await fetch(base + '/documents/' + created.data.id + '/versions/1/content', { headers: { Origin: origin, Cookie: owner.cookie, 'X-CSRF-Token': owner.snapshot.csrf } })
+    assert.equal(oldFile.status, 200)
+    assert.equal(await oldFile.text(), first)
+    assert.equal((await call('/documents/' + created.data.id + '/versions', 'GET', undefined, other)).status, 404)
   })
 
   await test('support tickets and tax filings enforce audited state transitions', async () => {
@@ -1143,6 +1459,20 @@ try {
       (await call('/suppliers', 'GET', undefined, other)).status,
       200,
     )
+  })
+
+  await test('fulfillment and returns enforce warehouse lifecycle transitions', async () => {
+    const fulfillment = await call('/warehouse/fulfillments', 'POST', { orderRef: 'SO-9001', customer: 'Northstar', items: '2 keyboards', location: 'Lagos', assignee: 'Operations' }, owner)
+    assert.equal(fulfillment.status, 201)
+    assert.equal((await call('/warehouse/fulfillments/' + fulfillment.data.id, 'PATCH', { status: 'dispatched' }, owner)).status, 409)
+    assert.equal((await call('/warehouse/fulfillments/' + fulfillment.data.id, 'PATCH', { status: 'packed' }, owner)).status, 200)
+    assert.equal((await call('/warehouse/fulfillments/' + fulfillment.data.id, 'PATCH', { status: 'dispatched' }, owner)).status, 200)
+    assert.equal((await call('/warehouse/fulfillments/' + fulfillment.data.id, 'PATCH', { status: 'packed' }, owner)).status, 409)
+    assert.equal((await call('/warehouse/fulfillments/' + fulfillment.data.id, 'PATCH', { status: 'packed' }, other)).status, 404)
+    const returnRecord = await call('/warehouse/returns', 'POST', { rma: 'RMA-9001', customer: 'Northstar', product: 'Keyboard', condition: 'restockable' }, owner)
+    assert.equal(returnRecord.status, 201)
+    assert.equal((await call('/warehouse/returns/' + returnRecord.data.id, 'PATCH', { status: 'restocked' }, owner)).status, 200)
+    assert.equal((await call('/warehouse/returns/' + returnRecord.data.id, 'PATCH', { status: 'refunded' }, owner)).status, 409)
   })
 
   await test('operational records and warehouse transfers preserve tenant ownership and quantities', async () => {
@@ -1306,6 +1636,40 @@ try {
       (await app.store.pool.query('SELECT * FROM tenants')).rowCount,
       0,
     )
+  })
+  await test('completion expansion: PDF, forecasts, approvals, branches, interviews and outbox', async () => {
+    const a = await register()
+    const pdf = await fetch(base + '/finance/export.pdf', { headers: { Origin: origin, Cookie: a.cookie } })
+    assert.equal(pdf.status, 200)
+    assert.match(pdf.headers.get('content-type') || '', /application\/pdf/)
+    assert.equal((await pdf.arrayBuffer()).byteLength > 100, true)
+    const forecast = await call('/ai/forecast', 'POST', { metric: 'cash' }, a)
+    assert.equal(forecast.status, 200)
+    assert.ok(forecast.data.id)
+    assert.equal((await call('/ai/forecasts', 'GET', undefined, a)).data.forecasts.length >= 1, true)
+    assert.equal((await call('/ai/forecasts/' + forecast.data.id, 'GET', undefined, a)).status, 200)
+    assert.equal((await call('/ai/forecasts', 'GET', undefined, other)).data.forecasts.some((r: { id: string }) => r.id === forecast.data.id), false)
+    const chains = await call('/approvals/chains', 'GET', undefined, a)
+    assert.equal(chains.status, 200)
+    assert.ok(chains.data.chains.length >= 3)
+    const req1 = await call('/approvals/requests', 'POST', { scope: 'purchase_order', entityType: 'purchase_order', entityId: randomUUID(), amount: 600000 }, a)
+    assert.equal(req1.status, 201)
+    assert.equal((await call('/approvals/requests/' + req1.data.id, 'PATCH', { version: 1, decision: 'approve' }, a)).data.status, 'pending')
+    const branch = await call('/branches', 'POST', { name: 'Lagos HQ', code: 'lag' }, a)
+    assert.equal(branch.status, 201)
+    assert.equal(branch.data.code, 'LAG')
+    assert.equal((await call('/branches', 'GET', undefined, a)).data.branches.length >= 1, true)
+    const candidate = await call('/hr/candidates', 'POST', { name: 'Interviewee', email: 'i@example.test', position: 'Ops' }, a)
+    assert.equal(candidate.status, 201)
+    const interview = await call('/hr/candidates/' + candidate.data.id + '/interviews', 'POST', { interviewAt: new Date().toISOString(), interviewers: 'Owner' }, a)
+    assert.equal(interview.status, 201)
+    assert.equal((await call('/hr/candidates/' + candidate.data.id + '/interviews', 'GET', undefined, a)).data.interviews.length, 1)
+    const queued = await call('/notifications/outbox', 'POST', { channel: 'email', recipient: 'ops@example.test', subject: 'Hi', body: 'Hello' }, a)
+    assert.equal(queued.status, 201)
+    assert.equal((await call('/notifications/outbox', 'GET', undefined, a)).data.messages.length >= 1, true)
+    assert.equal((await call('/notifications/outbox/' + queued.data.id + '/deliver', 'POST', {}, a)).data.status, 'sent')
+    const audit = await call('/audit-logs', 'GET', undefined, a)
+    assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'approval_requested'))
   })
 } finally {
   await app.close()

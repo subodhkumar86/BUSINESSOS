@@ -1,8 +1,17 @@
+import { queueMessage, signDelivery } from './notify.ts'
+import { pdfReport } from './pdf.ts'
+import { chainInput, chainUpdate, approvalDecision, seedDefaultChains, matchingChain } from './approvals.ts'
+import { handleReturns } from './returns.ts'
+import { handleShipments } from './shipments.ts'
+import { financeWorkbook } from './finance-workbook.ts'
+import { handleWorkflow } from './workflows.ts'
+import { candidateInput, candidateUpdate, canAdvanceCandidate } from './recruitment.ts'
 import { customerInput, customerUpdate, interactionInput } from './customers.ts'
 import { reportingPeriod, periodState } from '../src/reporting.ts'
 import {validateProductionUpdate, depreciation} from './operational-rules.ts'
 import {requiredFeature, actionFeature} from './entitlements.ts'
 import { webhookBinding, verifyBankSignature, normalizeBankEvent } from './bank-webhooks.ts'
+import { suggestReconciliation } from './reconciliation.ts'
 import {
   createServer,
   type IncomingMessage,
@@ -107,20 +116,20 @@ async function matches(value: string, stored: string) {
     Buffer.from(h, 'hex'),
   )
 }
-async function rawBody(req: IncomingMessage): Promise<Buffer> {
+async function rawBody(req: IncomingMessage, maxBytes = 32768): Promise<Buffer> {
   if (!req.headers['content-type']?.startsWith('application/json'))
     fail(415, 'Send JSON data.')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > 32768) fail(413, 'Request too large.')
+    if (size > maxBytes) fail(413, 'Request too large.')
     chunks.push(chunk)
   }
   return Buffer.concat(chunks)
 }
-async function body(req: IncomingMessage): Promise<unknown> {
-  const raw = await rawBody(req)
+async function body(req: IncomingMessage, maxBytes = 32768): Promise<unknown> {
+  const raw = await rawBody(req, maxBytes)
   try {
     return JSON.parse(raw.toString())
   } catch {
@@ -684,17 +693,163 @@ export async function createApp(config: {
           const existing=(await c.query('SELECT id FROM bank_transactions WHERE bank_account_id=$1 AND external_ref=$2',[binding.accountId,event.id])).rows[0]
           if (existing) return {status:'duplicate_ignored',transactionId:existing.id}
           const id=randomUUID()
-          await c.query('INSERT INTO bank_transactions(id,tenant_id,bank_account_id,external_ref,occurred_at,amount,direction,reference,raw_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,binding.tenantId,binding.accountId,event.id,event.occurredAt,event.amount,event.direction,event.reference,payload])
-          await store.append(c,binding.tenantId,{id:randomUUID(),date:new Date().toISOString(),actor:'webhook:'+provider,action:'bank_transaction_received',entity:'bank_transaction',detail:id+' / '+event.id})
-          return {status:'ingested',transactionId:id}
+          const { state } = await store.read(c, binding.tenantId)
+          const suggestion = suggestReconciliation(event, [
+            ...state.invoices
+              .filter((invoice) => invoice.status === 'Unpaid')
+              .map((invoice) => ({
+                type: 'invoice' as const,
+                id: invoice.id,
+                amount: invoice.amount,
+                label: invoice.name,
+              })),
+            ...state.expenses.map((expense) => ({
+              type: 'expense' as const,
+              id: expense.id,
+              amount: expense.amount,
+              label: expense.name,
+            })),
+          ])
+          await c.query(
+            `INSERT INTO bank_transactions
+              (id,tenant_id,bank_account_id,external_ref,occurred_at,amount,direction,reference,raw_payload,match_status,matched_entity_type,matched_entity_id)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            [
+              id,
+              binding.tenantId,
+              binding.accountId,
+              event.id,
+              event.occurredAt,
+              event.amount,
+              event.direction,
+              event.reference,
+              payload,
+              suggestion ? 'suggested' : 'unmatched',
+              suggestion?.source.type || null,
+              suggestion?.source.id || null,
+            ],
+          )
+          await store.append(c,binding.tenantId,{id:randomUUID(),date:new Date().toISOString(),actor:'webhook:'+provider,action:'bank_transaction_received',entity:'bank_transaction',detail:id+' / '+event.id+(suggestion ? ` -> suggested ${suggestion.source.type} (${suggestion.confidence}%: ${suggestion.reason})` : '')})
+          return {status:'ingested',transactionId:id,matchStatus:suggestion ? 'suggested' : 'unmatched'}
         })
         return send(res,200,result)
+      }
+      const sharedDocumentRoute = path.match(
+        /^\/api\/v1\/shared-documents\/([a-f0-9]{64})$/i,
+      )
+      if (req.method === 'GET' && sharedDocumentRoute) {
+        const tokenHash = digest(sharedDocumentRoute[1])
+        const client = await store.pool.connect()
+        let share: { id: string; tenant_id: string; document_id: string } | undefined
+        try {
+          await client.query('BEGIN')
+          await client.query("SELECT set_config('app.share_token',$1,true)", [tokenHash])
+          share = (
+            await client.query(
+              `SELECT id,tenant_id,document_id FROM document_shares
+               WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`,
+              [tokenHash],
+            )
+          ).rows[0]
+          await client.query('COMMIT')
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined)
+          throw error
+        } finally {
+          client.release()
+        }
+        if (!share) {
+          fail(404, 'This document link is invalid or has expired.')
+          return
+        }
+        const activeShare = share
+        const file = await store.tenant(activeShare.tenant_id, async (c) => {
+          const row = (
+            await c.query(
+              `SELECT d.filename,d.mime_type,b.content
+               FROM documents d JOIN document_blobs b ON b.document_id=d.id
+               WHERE d.id=$1 AND d.tenant_id=$2 AND d.status='active'`,
+              [activeShare.document_id, activeShare.tenant_id],
+            )
+          ).rows[0]
+          if (!row) fail(404, 'This document is unavailable.')
+          await store.append(c, activeShare.tenant_id, {
+            id: randomUUID(),
+            date: new Date().toISOString(),
+            actor: 'shared-link:' + activeShare.id,
+            action: 'document_shared_link_downloaded',
+            entity: 'document',
+            detail: activeShare.document_id,
+          })
+          return row as { filename: string; mime_type: string; content: Buffer }
+        })
+        res.writeHead(200, {
+          'Content-Type': file.mime_type,
+          'Content-Length': file.content.length,
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+          'Cache-Control': 'private, no-store',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        return res.end(file.content)
       }
       const { key, session: s } = await auth(req)
       if (mutation && req.headers['x-csrf-token'] !== s.csrf)
         fail(403, 'Session verification failed. Reload and try again.')
       if (req.method === 'GET' && path === '/api/v1/workspace')
         return send(res, 200, await snap(s))
+      const notificationRoute = /^\/api\/v1\/notifications(?:\/([0-9a-f-]+)\/read)?$/i.exec(path)
+      if (notificationRoute) {
+        const notificationId = notificationRoute[1] ? z.string().uuid().parse(notificationRoute[1]) : undefined
+        if (req.method === 'GET' && !notificationId) {
+          const unreadOnly = new URL(req.url || '/', 'http://localhost').searchParams.get('unread') === 'true'
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            await ensureCurrent(c, s)
+            const rows = await c.query(
+              `SELECT id,kind,title,body,link,read_at,created_at
+               FROM notifications WHERE tenant_id=$1 AND recipient_id=$2
+               AND ($3::boolean=false OR read_at IS NULL)
+               ORDER BY created_at DESC,id DESC LIMIT 100`,
+              [s.tenant, s.user.id, unreadOnly],
+            )
+            return { notifications: rows.rows, unread: rows.rows.filter((row) => !row.read_at).length }
+          }))
+        }
+        if (req.method === 'PATCH' && notificationId) {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            await ensureCurrent(c, s)
+            const updated = await c.query(
+              `UPDATE notifications SET read_at=COALESCE(read_at,now())
+               WHERE id=$1 AND tenant_id=$2 AND recipient_id=$3 RETURNING id,read_at`,
+              [notificationId, s.tenant, s.user.id],
+            )
+            if (!updated.rowCount) fail(404, 'Notification not found.')
+            return { id: updated.rows[0].id, readAt: updated.rows[0].read_at }
+          }))
+        }
+        if (req.method === 'POST' && !notificationId) {
+          if (s.user.role !== 'owner') fail(403, 'Only workspace owners can publish announcements.')
+          const b = z.object({
+            title: z.string().trim().min(1).max(160), body: z.string().trim().min(1).max(1000),
+            link: z.string().trim().max(500).regex(/^\/[a-z0-9/?=&_-]*$/i).optional(),
+          }).strict().parse(await body(req))
+          return send(res, 201, await store.tenant(s.tenant, async (c) => {
+            await ensureCurrent(c, s)
+            const recipients = await c.query('SELECT id FROM users WHERE tenant_id=$1 AND active=true', [s.tenant])
+            const ids: string[] = []
+            for (const recipient of recipients.rows) {
+              const id = randomUUID(); ids.push(id)
+              await c.query(
+                `INSERT INTO notifications(id,tenant_id,recipient_id,actor_id,kind,title,body,link)
+                 VALUES($1,$2,$3,$4,'announcement',$5,$6,$7)`,
+                [id, s.tenant, recipient.id, s.user.id, b.title, b.body, b.link || null],
+              )
+            }
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'announcement_published', entity: 'notification', detail: b.title })
+            return { delivered: ids.length, notificationIds: ids }
+          }))
+        }
+        fail(405, 'Method not supported.')
+      }
       if (req.method === 'GET' && path === '/api/v1/bi/metrics') {
         const state = await store.tenant(s.tenant, async (c) => {
           await ensureCurrent(c, s)
@@ -817,6 +972,17 @@ export async function createApp(config: {
                       'Configured reorder thresholds identify stockout risk',
                     ],
                   }
+          const horizonDays = input.metric === 'pipeline' ? 45 : 30
+          const id = randomUUID()
+          const features = {
+            cash: current.cash, receivables: current.receivables, payables: current.payables,
+            pipeline: current.pipeline, stock: current.stock, lowStock: current.low.length,
+            invoices: state.invoices.length, expenses: state.expenses.length, products: state.products.length,
+          }
+          await c.query(
+            'INSERT INTO forecast_runs(id,tenant_id,metric,horizon_days,baseline,forecast_value,assumptions,confidence,data_window,model_version,features,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+            [id, s.tenant, input.metric, horizonDays, values.baseline, values.forecast, JSON.stringify(values.assumptions), 'limited', 'Current tenant workspace snapshot', 'deterministic-rules-v2', JSON.stringify(features), s.user.id],
+          )
           await store.append(c, s.tenant, {
             id: randomUUID(),
             date: new Date().toISOString(),
@@ -826,15 +992,28 @@ export async function createApp(config: {
             detail: input.metric,
           })
           return {
+            id,
             metric: input.metric,
-            horizonDays: input.metric === 'pipeline' ? 45 : 30,
+            horizonDays,
             ...values,
             confidence: 'limited',
             dataWindow: 'Current tenant workspace snapshot',
-            engine: 'deterministic-rules-v1',
+            engine: 'deterministic-rules-v2',
           }
         })
         return send(res, 200, result)
+      }
+      if ((req.method === 'GET' && path === '/api/v1/ai/forecasts') || (req.method === 'GET' && /^\/api\/v1\/ai\/forecasts\/[0-9a-f-]+$/i.test(path))) {
+        if (['auditor', 'super_admin'].includes(s.user.role) && req.method !== 'GET') fail(403, 'Read-only.')
+        const one = path.match(/^\/api\/v1\/ai\/forecasts\/([0-9a-f-]+)$/i)
+        const rows = await store.tenant(s.tenant, async (c) =>
+          (await c.query(
+            'SELECT id,metric,horizon_days,baseline,forecast_value,assumptions,confidence,data_window,model_version,features,created_at FROM forecast_runs WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY created_at DESC,id DESC LIMIT 100',
+            [s.tenant, one ? one[1] : null],
+          )).rows,
+        )
+        if (one && !rows.length) fail(404, 'Forecast not found.')
+        return send(res, 200, one ? rows[0] : { forecasts: rows })
       }
       if (req.method === 'POST' && path === '/api/v1/auth/logout') {
         await redis.del(key)
@@ -1040,7 +1219,8 @@ export async function createApp(config: {
           return send(res, 201, { id })
         }
       }
-      if (req.method === 'GET' && path === '/api/v1/finance/export.csv') {
+      if (req.method === 'GET' && ['/api/v1/finance/export.csv','/api/v1/finance/export.xlsx'].includes(path)) {
+        const xlsx = path.endsWith('.xlsx')
         if (!['owner', 'finance_admin', 'auditor'].includes(s.user.role))
           fail(403, 'Your role cannot export financial reports.')
         const period = reportingPeriod.parse(Object.fromEntries(new URL(req.url || '/', 'http://localhost').searchParams))
@@ -1071,12 +1251,14 @@ export async function createApp(config: {
             actor: s.user.email,
             action: 'finance_report_exported',
             entity: 'finance_report',
-            detail: JSON.stringify({format:'CSV',period}),
+            detail: JSON.stringify({format:xlsx?'XLSX':'CSV',period}),
           })
-          return (
-            rows.map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n'
-          )
+          return xlsx ? financeWorkbook(rows) : rows.map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n'
         })
+        if (Buffer.isBuffer(csv)) {
+          res.writeHead(200, {'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':'attachment; filename="businessos-finance-report.xlsx"','Cache-Control':'private, no-store','Content-Length':csv.length})
+          return res.end(csv)
+        }
         return sendCsv(res, 'businessos-finance-report.csv', csv)
       }
       if (req.method === 'GET' && path === '/api/v1/finance/statements') {
@@ -1093,6 +1275,33 @@ export async function createApp(config: {
           }
         })
         return send(res, 200, data)
+      }
+      if (req.method === 'GET' && path === '/api/v1/finance/export.pdf') {
+        if (!['owner', 'finance_admin', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot export financial reports.')
+        const period = reportingPeriod.parse(Object.fromEntries(new URL(req.url || '/', 'http://localhost').searchParams))
+        const data = await store.tenant(s.tenant, async (c) => {
+          const { state } = await store.read(c, s.tenant)
+          const statements = { income: generateIncomeStatement(state, period), balance: generateBalanceSheet(state, period), cashFlow: generateCashFlowStatement(state, period) }
+          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'finance_report_exported', entity: 'finance_report', detail: JSON.stringify({ format: 'PDF', period }) })
+          return { state, statements }
+        })
+        const money = (n: unknown) => String(n ?? 0)
+        const pdf = pdfReport('BusinessOS Financial Report', [
+          { label: 'Period', value: period.from || period.to ? `${period.from || 'Beginning'} to ${period.to || 'Latest'}` : 'All posted journals' },
+          { label: 'Revenue', value: money(data.statements.income.revenue) },
+          { label: 'COGS', value: money(data.statements.income.cogs) },
+          { label: 'Gross profit', value: money(data.statements.income.grossProfit) },
+          { label: 'Operating expenses', value: money(data.statements.income.operatingExpenses) },
+          { label: 'Net profit', value: money(data.statements.income.netProfit) },
+          { label: 'Cash (closing)', value: money(data.statements.cashFlow.closingCash) },
+          { label: 'Receivables', value: money(data.statements.balance.assets.receivables) },
+          { label: 'Inventory', value: money(data.statements.balance.assets.inventory) },
+          { label: 'Payables', value: money(data.statements.balance.liabilities.payables) },
+          { label: 'Balanced', value: String(data.statements.balance.isBalanced) },
+        ], { tenant: data.state.organisation, actor: s.user.email, period: period.from || period.to ? `${period.from || ''}..${period.to || ''}` : 'all' })
+        res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Disposition': 'attachment; filename="businessos-finance-report.pdf"', 'Cache-Control': 'private, no-store', 'Content-Length': pdf.length })
+        return res.end(pdf)
       }
       if (req.method === 'GET' && path === '/api/v1/audit-logs') {
         if (!['owner', 'auditor'].includes(s.user.role))
@@ -1230,6 +1439,107 @@ export async function createApp(config: {
         })
         return send(res, 200, { payslips: slips })
       }
+      const bankImportRoute = path.match(
+        /^\/api\/v1\/banks\/accounts\/([0-9a-f-]+)\/transactions\/import$/i,
+      )
+      if (req.method === 'POST' && bankImportRoute) {
+        if (!['owner', 'finance_admin'].includes(s.user.role))
+          fail(403, 'Your role cannot import bank transactions.')
+        const accountId = z.string().uuid().parse(bankImportRoute[1])
+        const payload = z
+          .object({
+            transactions: z
+              .array(
+                z
+                  .object({
+                    externalRef: text,
+                    occurredAt: z.string().datetime(),
+                    amount: z.number().finite().refine((value) => value !== 0),
+                    direction: z.enum(['credit', 'debit']),
+                    reference: text,
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(250),
+          })
+          .strict()
+          .parse(await body(req))
+        const refs = payload.transactions.map((transaction) => transaction.externalRef)
+        if (new Set(refs).size !== refs.length)
+          fail(400, 'Each imported transaction must have a unique external reference.')
+        const result = await store.tenant(s.tenant, async (c) => {
+          const account = (
+            await c.query(
+              'SELECT id FROM bank_accounts WHERE id=$1 AND tenant_id=$2',
+              [accountId, s.tenant],
+            )
+          ).rows[0]
+          if (!account) fail(404, 'Bank account not found.')
+          const existing = new Set(
+            (
+              await c.query(
+                `SELECT external_ref FROM bank_transactions
+                 WHERE tenant_id=$1 AND bank_account_id=$2 AND external_ref = ANY($3::text[])`,
+                [s.tenant, accountId, refs],
+              )
+            ).rows.map((row) => row.external_ref as string),
+          )
+          const { state } = await store.read(c, s.tenant)
+          let imported = 0
+          let suggested = 0
+          for (const transaction of payload.transactions) {
+            if (existing.has(transaction.externalRef)) continue
+            const suggestion = suggestReconciliation(transaction, [
+              ...state.invoices
+                .filter((invoice) => invoice.status === 'Unpaid')
+                .map((invoice) => ({
+                  type: 'invoice' as const,
+                  id: invoice.id,
+                  amount: invoice.amount,
+                  label: invoice.name,
+                })),
+              ...state.expenses.map((expense) => ({
+                type: 'expense' as const,
+                id: expense.id,
+                amount: expense.amount,
+                label: expense.name,
+              })),
+            ])
+            await c.query(
+              `INSERT INTO bank_transactions
+                (id,tenant_id,bank_account_id,external_ref,occurred_at,amount,direction,reference,raw_payload,match_status,matched_entity_type,matched_entity_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+              [
+                randomUUID(),
+                s.tenant,
+                accountId,
+                transaction.externalRef,
+                transaction.occurredAt,
+                transaction.amount,
+                transaction.direction,
+                transaction.reference,
+                { import: 'csv', transaction },
+                suggestion ? 'suggested' : 'unmatched',
+                suggestion?.source.type || null,
+                suggestion?.source.id || null,
+              ],
+            )
+            imported += 1
+            if (suggestion) suggested += 1
+          }
+          await store.append(c, s.tenant, {
+            id: randomUUID(),
+            date: new Date().toISOString(),
+            actor: s.user.email,
+            action: 'bank_statement_imported',
+            entity: 'bank_transaction',
+            detail: `${imported} imported, ${existing.size} duplicate references skipped, ${suggested} suggested matches`,
+          })
+          return { imported, skipped: existing.size, suggested }
+        })
+        return send(res, 201, result)
+      }
       const bankTransactionRoute = path.match(
         /^\/api\/v1\/banks\/accounts\/([0-9a-f-]+)\/transactions(?:\/([0-9a-f-]+))?$/i,
       )
@@ -1283,19 +1593,25 @@ export async function createApp(config: {
             ).rows[0]
             if (!account) fail(404, 'Bank account not found.')
             const { state } = await store.read(c, s.tenant)
-            const candidates =
-              b.direction === 'credit'
-                ? state.invoices
-                    .filter(
-                      (invoice) =>
-                        invoice.status === 'Unpaid' &&
-                        invoice.amount === Math.abs(b.amount),
-                    )
-                    .map((invoice) => ({ type: 'invoice', id: invoice.id }))
-                : state.expenses
-                    .filter((expense) => expense.amount === Math.abs(b.amount))
-                    .map((expense) => ({ type: 'expense', id: expense.id }))
-            const suggestion = candidates.length === 1 ? candidates[0] : null
+            const suggestion = suggestReconciliation(
+              b,
+              [
+                ...state.invoices
+                  .filter((invoice) => invoice.status === 'Unpaid')
+                  .map((invoice) => ({
+                    type: 'invoice' as const,
+                    id: invoice.id,
+                    amount: invoice.amount,
+                    label: invoice.name,
+                  })),
+                ...state.expenses.map((expense) => ({
+                  type: 'expense' as const,
+                  id: expense.id,
+                  amount: expense.amount,
+                  label: expense.name,
+                })),
+              ],
+            )
             await c.query(
               `INSERT INTO bank_transactions
                 (id,tenant_id,bank_account_id,external_ref,occurred_at,amount,direction,reference,raw_payload,match_status,matched_entity_type,matched_entity_id)
@@ -1311,8 +1627,8 @@ export async function createApp(config: {
                 b.reference,
                 b,
                 suggestion ? 'suggested' : 'unmatched',
-                suggestion?.type || null,
-                suggestion?.id || null,
+                suggestion?.source.type || null,
+                suggestion?.source.id || null,
               ],
             )
             await store.append(c, s.tenant, {
@@ -1323,12 +1639,14 @@ export async function createApp(config: {
               entity: 'bank_transaction',
               detail:
                 b.reference +
-                (suggestion ? ` -> suggested ${suggestion.type}` : ''),
+                (suggestion
+                  ? ` -> suggested ${suggestion.source.type} (${suggestion.confidence}%: ${suggestion.reason})`
+                  : ''),
             })
             return {
               match_status: suggestion ? 'suggested' : 'unmatched',
-              matched_entity_type: suggestion?.type || null,
-              matched_entity_id: suggestion?.id || null,
+              matched_entity_type: suggestion?.source.type || null,
+              matched_entity_id: suggestion?.source.id || null,
             }
           })
           return send(res, 201, {
@@ -1351,41 +1669,60 @@ export async function createApp(config: {
                 'matched',
                 'ignored',
               ]),
+              matchedEntityType: z.enum(['invoice', 'expense']).optional(),
+              matchedEntityId: z.string().uuid().optional(),
             })
             .strict()
             .parse(await body(req))
           const reconciliation = await store.tenant(s.tenant, async (c) => {
             const current = (
               await c.query(
-                `SELECT match_status,matched_entity_type,matched_entity_id FROM bank_transactions
+                `SELECT match_status,matched_entity_type,matched_entity_id,amount,direction FROM bank_transactions
                WHERE id=$1 AND bank_account_id=$2 AND tenant_id=$3 FOR UPDATE`,
                 [transactionId, accountId, s.tenant],
               )
             ).rows[0]
             if (!current) fail(404, 'Bank transaction not found.')
             let invoiceSettled = false
+            let matchedEntityType = current.matched_entity_type as
+              | 'invoice'
+              | 'expense'
+              | null
+            let matchedEntityId = current.matched_entity_id as string | null
             if (b.matchStatus === 'matched') {
-              if (
+              const manualMatch = b.matchedEntityType || b.matchedEntityId
+              if (Boolean(b.matchedEntityType) !== Boolean(b.matchedEntityId))
+                fail(400, 'Provide both a source type and source ID for a manual match.')
+              if (manualMatch) {
+                matchedEntityType = b.matchedEntityType!
+                matchedEntityId = b.matchedEntityId!
+              } else if (
                 current.match_status !== 'suggested' ||
-                !current.matched_entity_type ||
-                !current.matched_entity_id
+                !matchedEntityType ||
+                !matchedEntityId
               )
                 fail(
                   400,
-                  'Only a current system suggestion can be approved as matched.',
+                  'Choose a valid source for a manual match, or approve a current system suggestion.',
                 )
               const snapshot = await store.read(c, s.tenant, true)
               const { state } = snapshot
+              const expectedType = current.direction === 'credit' ? 'invoice' : 'expense'
+              if (matchedEntityType !== expectedType)
+                fail(400, 'Credits can only match invoices and debits can only match expenses.')
               const sourceExists =
-                current.matched_entity_type === 'invoice'
+                matchedEntityType === 'invoice'
                   ? state.invoices.some(
                       (invoice) =>
-                        invoice.id === current.matched_entity_id &&
-                        invoice.status === 'Unpaid',
+                        invoice.id === matchedEntityId &&
+                        invoice.status === 'Unpaid' &&
+                        invoice.amount === Math.abs(Number(current.amount)),
                     )
-                  : current.matched_entity_type === 'expense'
+                  : matchedEntityType === 'expense'
                     ? state.expenses.some(
-                        (expense) => expense.id === current.matched_entity_id,
+                        (expense) =>
+                          expense.id === matchedEntityId &&
+                          expense.amount === Math.abs(Number(current.amount)),
                       )
                     : false
               if (!sourceExists)
@@ -1393,11 +1730,11 @@ export async function createApp(config: {
                   409,
                   'The suggested source is no longer available for reconciliation.',
                 )
-              if (current.matched_entity_type === 'invoice') {
+              if (matchedEntityType === 'invoice') {
                 const next = transition(state, {
                   type: 'status',
                   collection: 'invoices',
-                  id: current.matched_entity_id,
+                  id: matchedEntityId!,
                   status: 'Paid',
                   actor: s.user.email,
                 })
@@ -1426,8 +1763,7 @@ export async function createApp(config: {
                 400,
                 'Reconciliation suggestions are generated by the matching engine.',
               )
-            const preserveSource =
-              b.matchStatus === 'suggested' || b.matchStatus === 'matched'
+            const preserveSource = b.matchStatus === 'suggested' || b.matchStatus === 'matched'
             const result = await c.query(
               `UPDATE bank_transactions SET match_status=$1,
                  matched_entity_type=$2,
@@ -1437,8 +1773,8 @@ export async function createApp(config: {
                WHERE id=$5 AND bank_account_id=$6 AND tenant_id=$7`,
               [
                 b.matchStatus,
-                preserveSource ? current.matched_entity_type : null,
-                preserveSource ? current.matched_entity_id : null,
+                preserveSource ? matchedEntityType : null,
+                preserveSource ? matchedEntityId : null,
                 s.user.id,
                 transactionId,
                 accountId,
@@ -1457,7 +1793,7 @@ export async function createApp(config: {
                 ' -> ' +
                 b.matchStatus +
                 (preserveSource
-                  ? ` (${current.matched_entity_type}:${current.matched_entity_id})`
+                  ? ` (${matchedEntityType}:${matchedEntityId})`
                   : ''),
             })
             return { invoiceSettled }
@@ -1499,9 +1835,20 @@ export async function createApp(config: {
                 .max(120)
                 .regex(/^[\w.-]+\/[\w.+-]+$/),
               sizeBytes: z.number().int().min(0).max(104857600),
+              contentBase64: z.string().min(4).max(2796204).optional(),
             })
             .strict()
-            .parse(await body(req))
+            .parse(await body(req, 3 * 1024 * 1024))
+          let content: Buffer | null = null
+          if (b.contentBase64) {
+            if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b.contentBase64))
+              fail(400, 'Document content must be Base64 encoded.')
+            content = Buffer.from(b.contentBase64, 'base64')
+            if (!content.length || content.length > 2097152)
+              fail(413, 'Document uploads are limited to 2 MB in local storage.')
+            if (content.length !== b.sizeBytes)
+              fail(400, 'Document size does not match its uploaded content.')
+          }
           const id = randomUUID()
           const storageKey = `${s.tenant}/${id}/${b.filename}`
           await store.tenant(s.tenant, async (c) => {
@@ -1518,13 +1865,24 @@ export async function createApp(config: {
                 s.user.id,
               ],
             )
+            if (content)
+              await c.query(
+                `INSERT INTO document_blobs(document_id,tenant_id,content,sha256)
+                 VALUES($1,$2,$3,$4)`,
+                [
+                  id,
+                  s.tenant,
+                  content,
+                  createHash('sha256').update(content).digest('hex'),
+                ],
+              )
             await store.append(c, s.tenant, {
               id: randomUUID(),
               date: new Date().toISOString(),
               actor: s.user.email,
               action: 'document_registered',
               entity: 'document',
-              detail: b.filename,
+              detail: b.filename + (content ? ' (binary stored)' : ' (metadata only)'),
             })
           })
           return send(res, 201, {
@@ -1533,8 +1891,169 @@ export async function createApp(config: {
             storageKey,
             version: 1,
             status: 'active',
+            contentStored: Boolean(content),
           })
         }
+      }
+      const documentCommentRoute = path.match(/^\/api\/v1\/documents\/([0-9a-f-]+)\/comments$/i)
+      if (documentCommentRoute) {
+        const documentId = z.string().uuid().parse(documentCommentRoute[1])
+        if (req.method === 'GET') {
+          if (!canReadModule(s.user.role, 'documents')) fail(403, 'Your role cannot view document comments.')
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            const exists = await c.query('SELECT id FROM documents WHERE id=$1 AND tenant_id=$2', [documentId, s.tenant])
+            if (!exists.rowCount) fail(404, 'Document not found.')
+            return { comments: (await c.query(
+              `SELECT dc.id,dc.body,dc.created_at,u.name AS author
+               FROM document_comments dc JOIN users u ON u.id=dc.author_id
+               WHERE dc.document_id=$1 AND dc.tenant_id=$2 ORDER BY dc.created_at DESC,dc.id DESC`,
+              [documentId, s.tenant],
+            )).rows }
+          }))
+        }
+        if (req.method === 'POST') {
+          if (!canWriteModule(s.user.role, 'documents')) fail(403, 'Your role cannot comment on documents.')
+          const b = z.object({ body: z.string().trim().min(1).max(1000) }).strict().parse(await body(req))
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            const exists = await c.query('SELECT id FROM documents WHERE id=$1 AND tenant_id=$2', [documentId, s.tenant])
+            if (!exists.rowCount) fail(404, 'Document not found.')
+            await c.query('INSERT INTO document_comments(id,tenant_id,document_id,author_id,body) VALUES($1,$2,$3,$4,$5)', [id, s.tenant, documentId, s.user.id, b.body])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'document_commented', entity: 'document', detail: documentId })
+          })
+          return send(res, 201, { id, body: b.body })
+        }
+        fail(405, 'Method not supported.')
+      }
+      const documentVersionRoute = path.match(/^\/api\/v1\/documents\/([0-9a-f-]+)\/versions(?:\/(\d+)(\/content)?)?$/i)
+      if (documentVersionRoute) {
+        const documentId = z.string().uuid().parse(documentVersionRoute[1])
+        const version = documentVersionRoute[2] ? z.coerce.number().int().min(1).parse(documentVersionRoute[2]) : undefined
+        const contentRequest = Boolean(documentVersionRoute[3])
+        if (!version && req.method === 'GET') {
+          if (!canReadModule(s.user.role, 'documents')) fail(403, 'Your role cannot view document history.')
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            const document = await c.query('SELECT id,version,filename,mime_type,size_bytes,updated_at FROM documents WHERE id=$1 AND tenant_id=$2', [documentId, s.tenant])
+            if (!document.rowCount) fail(404, 'Document not found.')
+            const history = await c.query('SELECT version,filename,mime_type,size_bytes,created_at FROM document_versions WHERE document_id=$1 AND tenant_id=$2 ORDER BY version DESC', [documentId, s.tenant])
+            return { current: document.rows[0], versions: history.rows }
+          }))
+        }
+        if (!version && req.method === 'POST') {
+          if (!canWriteModule(s.user.role, 'documents')) fail(403, 'Your role cannot upload document revisions.')
+          const b = z.object({ filename: z.string().trim().min(1).max(255), mimeType: z.string().trim().min(1).max(120).regex(/^[\w.-]+\/[\w.+-]+$/), sizeBytes: z.number().int().min(1).max(2097152), contentBase64: z.string().min(4).max(2796204) }).strict().parse(await body(req, 3 * 1024 * 1024))
+          if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b.contentBase64)) fail(400, 'Document content must be Base64 encoded.')
+          const content = Buffer.from(b.contentBase64, 'base64')
+          if (!content.length || content.length > 2097152) fail(413, 'Document uploads are limited to 2 MB in local storage.')
+          if (content.length !== b.sizeBytes) fail(400, 'Document size does not match its uploaded content.')
+          const hash = createHash('sha256').update(content).digest('hex')
+          const result = await store.tenant(s.tenant, async (c) => {
+            const current = (await c.query(
+              `SELECT d.id,d.filename,d.mime_type,d.size_bytes,d.version,d.status,d.uploaded_by,b.content,b.sha256
+               FROM documents d JOIN document_blobs b ON b.document_id=d.id
+               WHERE d.id=$1 AND d.tenant_id=$2 FOR UPDATE`, [documentId, s.tenant],
+            )).rows[0]
+            if (!current) fail(404, 'Only documents with stored content can be revised.')
+            if (current.status !== 'active') fail(409, 'Restore the document before uploading a revision.')
+            await c.query(
+              `INSERT INTO document_versions(id,tenant_id,document_id,version,filename,mime_type,size_bytes,content,sha256,uploaded_by)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(tenant_id,document_id,version) DO NOTHING`,
+              [randomUUID(), s.tenant, documentId, current.version, current.filename, current.mime_type, current.size_bytes, current.content, current.sha256, current.uploaded_by],
+            )
+            const nextVersion = Number(current.version) + 1
+            await c.query('UPDATE documents SET filename=$1,mime_type=$2,size_bytes=$3,version=$4,updated_at=now(),uploaded_by=$5 WHERE id=$6 AND tenant_id=$7', [b.filename, b.mimeType, b.sizeBytes, nextVersion, s.user.id, documentId, s.tenant])
+            await c.query('UPDATE document_blobs SET content=$1,sha256=$2 WHERE document_id=$3 AND tenant_id=$4', [content, hash, documentId, s.tenant])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'document_revised', entity: 'document', detail: documentId + ' v' + nextVersion })
+            return { version: nextVersion }
+          })
+          return send(res, 201, result)
+        }
+        if (version && contentRequest && req.method === 'GET') {
+          if (!canReadModule(s.user.role, 'documents')) fail(403, 'Your role cannot download document history.')
+          const file = await store.tenant(s.tenant, async (c) => {
+            const row = (await c.query('SELECT filename,mime_type,content FROM document_versions WHERE document_id=$1 AND tenant_id=$2 AND version=$3', [documentId, s.tenant, version])).rows[0]
+            if (!row) fail(404, 'Document version not found.')
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'document_version_downloaded', entity: 'document', detail: documentId + ' v' + version })
+            return row as { filename: string; mime_type: string; content: Buffer }
+          })
+          res.writeHead(200, { 'Content-Type': file.mime_type, 'Content-Length': file.content.length, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+          return res.end(file.content)
+        }
+        fail(405, 'Method not supported.')
+      }
+      const documentContentRoute = path.match(
+        /^\/api\/v1\/documents\/([0-9a-f-]+)\/content$/i,
+      )
+      if (documentContentRoute && req.method === 'GET') {
+        if (!canReadModule(s.user.role, 'documents'))
+          fail(403, 'Your role cannot download documents.')
+        const id = z.string().uuid().parse(documentContentRoute[1])
+        const file = await store.tenant(s.tenant, async (c) => {
+          const row = (
+            await c.query(
+              `SELECT d.filename,d.mime_type,b.content
+               FROM documents d JOIN document_blobs b ON b.document_id=d.id
+               WHERE d.id=$1 AND d.tenant_id=$2 AND d.status='active'`,
+              [id, s.tenant],
+            )
+          ).rows[0]
+          if (!row) fail(404, 'Document content is unavailable.')
+          await store.append(c, s.tenant, {
+            id: randomUUID(),
+            date: new Date().toISOString(),
+            actor: s.user.email,
+            action: 'document_downloaded',
+            entity: 'document',
+            detail: id,
+          })
+          return row as { filename: string; mime_type: string; content: Buffer }
+        })
+        res.writeHead(200, {
+          'Content-Type': file.mime_type,
+          'Content-Length': file.content.length,
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+          'Cache-Control': 'private, no-store',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        return res.end(file.content)
+      }
+      const documentShareRoute = path.match(
+        /^\/api\/v1\/documents\/([0-9a-f-]+)\/shares$/i,
+      )
+      if (documentShareRoute && req.method === 'POST') {
+        if (!canWriteModule(s.user.role, 'documents'))
+          fail(403, 'Your role cannot share documents.')
+        const documentId = z.string().uuid().parse(documentShareRoute[1])
+        const { expiresHours } = z
+          .object({ expiresHours: z.number().int().min(1).max(168).default(24) })
+          .strict()
+          .parse(await body(req))
+        const token = randomBytes(32).toString('hex')
+        const expiresAt = new Date(Date.now() + expiresHours * 3600000)
+        await store.tenant(s.tenant, async (c) => {
+          const document = (
+            await c.query(
+              `SELECT d.id FROM documents d JOIN document_blobs b ON b.document_id=d.id
+               WHERE d.id=$1 AND d.tenant_id=$2 AND d.status='active'`,
+              [documentId, s.tenant],
+            )
+          ).rows[0]
+          if (!document) fail(404, 'Only active documents with stored content can be shared.')
+          await c.query(
+            `INSERT INTO document_shares(id,tenant_id,document_id,token_hash,expires_at,created_by)
+             VALUES($1,$2,$3,$4,$5,$6)`,
+            [randomUUID(), s.tenant, documentId, digest(token), expiresAt, s.user.id],
+          )
+          await store.append(c, s.tenant, {
+            id: randomUUID(),
+            date: new Date().toISOString(),
+            actor: s.user.email,
+            action: 'document_share_created',
+            entity: 'document',
+            detail: documentId + ' / expires ' + expiresAt.toISOString(),
+          })
+        })
+        return send(res, 201, { token, expiresAt: expiresAt.toISOString() })
       }
       const documentRoute = path.match(/^\/api\/v1\/documents\/([0-9a-f-]+)$/i)
       if (documentRoute && req.method === 'PATCH') {
@@ -2356,6 +2875,232 @@ export async function createApp(config: {
         }
       }
 
+      const returnRoute = new RegExp('^/api/v1/warehouse/shipment-returns(?:/([0-9a-f-]+))?$','i').exec(path)
+      if(returnRoute) {
+        const result=await handleReturns({store,session:s,method:req.method||'GET',id:returnRoute[1],input:mutation?await body(req):undefined,requestKey:req.headers['idempotency-key'] as string|undefined,ensureCurrent,fail})
+        return send(res,result.status,result.body)
+      }
+      const shipmentRoute = new RegExp('^/api/v1/warehouse/shipments(?:/([0-9a-f-]+))?$','i').exec(path)
+      if(shipmentRoute) {
+        const result=await handleShipments({store,session:s,method:req.method||'GET',id:shipmentRoute[1],input:mutation?await body(req):undefined,requestKey:req.headers['idempotency-key'] as string|undefined,ensureCurrent,fail})
+        return send(res,result.status,result.body)
+      }
+      const warehouseWorkflowRoute = path.match(/^\/api\/v1\/warehouse\/(fulfillments|returns)(?:\/([0-9a-f-]+))?$/i)
+      if (warehouseWorkflowRoute) {
+        if (!['owner', 'operations_manager', 'auditor'].includes(s.user.role)) fail(403, 'Your role cannot access this workflow.')
+        const kind = warehouseWorkflowRoute[1] === 'fulfillments' ? 'fulfillment' : 'return'
+        const recordId = warehouseWorkflowRoute[2] ? z.string().uuid().parse(warehouseWorkflowRoute[2]) : undefined
+        if (req.method === 'GET' && !recordId) {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            records: (await c.query(
+              `SELECT id,name,detail,status,metadata,created_at,updated_at FROM module_records
+               WHERE tenant_id=$1 AND module='warehouse' AND metadata->>'kind'=$2 ORDER BY updated_at DESC,id DESC`,
+              [s.tenant, kind],
+            )).rows,
+          })))
+        }
+        if (req.method === 'POST' && !recordId) {
+          if (!['owner', 'operations_manager'].includes(s.user.role)) fail(403, 'Only authorised roles can create warehouse records.')
+          const input = await body(req)
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            if (kind === 'fulfillment') {
+              const b = z.object({ orderRef: text, customer: z.string().trim().max(160).default(''), items: z.string().trim().min(1).max(500), location: z.string().trim().max(160).default(''), assignee: z.string().trim().max(160).default('') }).strict().parse(input)
+              await c.query('INSERT INTO module_records(id,tenant_id,module,name,detail,status,metadata) VALUES($1,$2,\'warehouse\',$3,$4,\'picking\',$5)', [id, s.tenant, b.orderRef, b.items, { kind, customer: b.customer, location: b.location, assignee: b.assignee }])
+              await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'fulfillment_created', entity: 'warehouse', detail: b.orderRef })
+            } else {
+              const b = z.object({ rma: text, customer: z.string().trim().max(160).default(''), product: z.string().trim().min(1).max(500), condition: z.enum(['inspecting','restockable','damaged','salvage']) }).strict().parse(input)
+              await c.query('INSERT INTO module_records(id,tenant_id,module,name,detail,status,metadata) VALUES($1,$2,\'warehouse\',$3,$4,\'pending\',$5)', [id, s.tenant, b.rma, b.product, { kind, customer: b.customer, condition: b.condition }])
+              await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'return_created', entity: 'warehouse', detail: b.rma })
+            }
+          })
+          return send(res, 201, { id })
+        }
+        if (req.method === 'PATCH' && recordId) {
+          if (!['owner', 'operations_manager'].includes(s.user.role)) fail(403, 'Only authorised roles can update warehouse records.')
+          const b = z.object({ status: kind === 'fulfillment' ? z.enum(['packed','dispatched']) : z.enum(['restocked','refunded','exchanged']) }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query(`SELECT name,status FROM module_records WHERE id=$1 AND tenant_id=$2 AND module='warehouse' AND metadata->>'kind'=$3 FOR UPDATE`, [recordId, s.tenant, kind])).rows[0]
+            if (!existing) fail(404, 'Warehouse record not found.')
+            const valid = kind === 'fulfillment' ? (existing.status === 'picking' && b.status === 'packed') || (existing.status === 'packed' && b.status === 'dispatched') : existing.status === 'pending'
+            if (!valid) fail(409, 'This warehouse status transition is not allowed.')
+            await c.query('UPDATE module_records SET status=$1,updated_at=now() WHERE id=$2 AND tenant_id=$3', [b.status, recordId, s.tenant])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: kind + '_status_updated', entity: 'warehouse', detail: existing.name + ' -> ' + b.status })
+          })
+          return send(res, 200, { ok: true })
+        }
+        fail(405, 'Method not supported.')
+      }
+
+      const workflowRoute = new RegExp('^/api/v1/workflows/([a-z]+)(?:/([0-9a-f-]+))?$','i').exec(path)
+      if (workflowRoute) {
+        const result = await handleWorkflow({store,session:s,method:req.method || 'GET',kind:workflowRoute[1],id:workflowRoute[2],input:mutation?await body(req):undefined,requestKey:req.headers['idempotency-key'] as string|undefined,ensureCurrent,fail})
+        return send(res,result.status,result.body)
+      }
+      const branchRoute = path.match(/^\/api\/v1\/branches(?:\/([0-9a-f-]+))?$/i)
+      if (branchRoute) {
+        if (!['owner', 'auditor'].includes(s.user.role)) fail(403, 'Only the owner can manage branches.')
+        const branchId = branchRoute[1] ? z.uuid().parse(branchRoute[1]) : undefined
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            branches: (await c.query('SELECT * FROM branches WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY created_at DESC,id', [s.tenant, branchId || null])).rows,
+          })))
+        }
+        if (s.user.role !== 'owner') fail(403, 'Only the owner can manage branches.')
+        if (req.method === 'POST' && !branchId) {
+          const input = z.object({ name: text, code: z.string().trim().min(1).max(20).transform((v) => v.toUpperCase()), timezone: z.string().trim().min(1).max(80).default('Africa/Lagos') }).strict().parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            const created = (await c.query('INSERT INTO branches(id,tenant_id,name,code,timezone) VALUES($1,$2,$3,$4,$5) RETURNING *', [randomUUID(), s.tenant, input.name, input.code, input.timezone])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'branch_created', entity: 'branch', detail: input.code })
+            return created
+          })
+          return send(res, 201, row)
+        }
+        if (req.method === 'PATCH' && branchId) {
+          const input = z.object({ version: z.number().int().positive(), name: text.optional(), status: z.enum(['active', 'archived']).optional() }).strict().parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            const updated = (await c.query('UPDATE branches SET name=COALESCE($1,name),status=COALESCE($2,status),version=version+1,updated_at=now() WHERE tenant_id=$3 AND id=$4 AND version=$5 RETURNING *', [input.name || null, input.status || null, s.tenant, branchId, input.version])).rows[0]
+            if (!updated) fail(409, 'Branch changed or not found. Refresh before updating.')
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'branch_updated', entity: branchId, detail: updated.code })
+            return updated
+          })
+          return send(res, 200, row)
+        }
+        fail(405, 'Method not supported.')
+      }
+      const chainRoute = path.match(/^\/api\/v1\/approvals\/chains(?:\/([0-9a-f-]+))?$/i)
+      if (chainRoute) {
+        if (!['owner', 'auditor'].includes(s.user.role)) fail(403, 'Only the owner can configure approval chains.')
+        const chainId = chainRoute[1] ? z.uuid().parse(chainRoute[1]) : undefined
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            await seedDefaultChains(c, s.tenant)
+            return { chains: (await c.query('SELECT * FROM approval_chains WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY scope,min_amount', [s.tenant, chainId || null])).rows }
+          }))
+        }
+        if (s.user.role !== 'owner') fail(403, 'Only the owner can configure approval chains.')
+        if (req.method === 'POST' && !chainId) {
+          const input = chainInput.parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            await seedDefaultChains(c, s.tenant)
+            const created = (await c.query('INSERT INTO approval_chains(id,tenant_id,name,scope,min_amount,steps) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [randomUUID(), s.tenant, input.name, input.scope, input.minAmount, JSON.stringify(input.steps)])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'approval_chain_created', entity: 'approval', detail: input.scope })
+            return created
+          })
+          return send(res, 201, row)
+        }
+        if (req.method === 'PATCH' && chainId) {
+          const input = chainUpdate.parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query('SELECT * FROM approval_chains WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, chainId])).rows[0]
+            if (!existing) fail(404, 'Approval chain not found.')
+            if (existing.version !== input.version) fail(409, 'Approval chain changed. Refresh before updating.')
+            const updated = (await c.query('UPDATE approval_chains SET steps=COALESCE($1,steps),min_amount=COALESCE($2,min_amount),active=COALESCE($3,active),version=version+1,updated_at=now() WHERE tenant_id=$4 AND id=$5 RETURNING *', [input.steps ? JSON.stringify(input.steps) : null, input.minAmount ?? null, input.active ?? null, s.tenant, chainId])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'approval_chain_updated', entity: chainId, detail: existing.scope })
+            return updated
+          })
+          return send(res, 200, row)
+        }
+        fail(405, 'Method not supported.')
+      }
+      const approvalRoute = path.match(/^\/api\/v1\/approvals\/requests(?:\/([0-9a-f-]+))?$/i)
+      if (approvalRoute) {
+        const requestId = approvalRoute[1] ? z.uuid().parse(approvalRoute[1]) : undefined
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            requests: (await c.query('SELECT r.*,ch.name AS chain_name FROM approval_requests r JOIN approval_chains ch ON ch.id=r.chain_id WHERE r.tenant_id=$1 AND ($2::uuid IS NULL OR r.id=$2) ORDER BY r.created_at DESC', [s.tenant, requestId || null])).rows,
+          })))
+        }
+        if (req.method === 'POST' && !requestId) {
+          if (!['owner', 'finance_admin', 'hr_admin', 'operations_manager'].includes(s.user.role)) fail(403, 'Your role cannot request approvals.')
+          const input = z.object({ scope: z.enum(['purchase_order', 'payroll', 'payment', 'master_data']), entityType: text, entityId: text, amount: z.number().finite().min(0).max(1e12).default(0) }).strict().parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            await seedDefaultChains(c, s.tenant)
+            const chain = await matchingChain(c, s.tenant, input.scope, input.amount)
+            if (!chain) fail(400, 'No active approval chain covers this request.')
+            const created = (await c.query('INSERT INTO approval_requests(id,tenant_id,chain_id,entity_type,entity_id,amount,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *', [randomUUID(), s.tenant, chain!.id, input.entityType, input.entityId, input.amount, s.user.id])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'approval_requested', entity: input.entityId, detail: input.scope })
+            return created
+          })
+          return send(res, 201, row)
+        }
+        if (req.method === 'PATCH' && requestId) {
+          const input = approvalDecision.parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query('SELECT r.*,ch.steps FROM approval_requests r JOIN approval_chains ch ON ch.id=r.chain_id WHERE r.tenant_id=$1 AND r.id=$2 FOR UPDATE', [s.tenant, requestId])).rows[0]
+            if (!existing) fail(404, 'Approval request not found.')
+            if (existing.version !== input.version) fail(409, 'Approval request changed. Refresh before deciding.')
+            if (existing.status !== 'pending') fail(409, 'This approval request is already decided.')
+            const steps = existing.steps as { role: string }[]
+            const step = steps[existing.current_step]
+            if (!step) fail(409, 'Approval chain has no remaining steps.')
+            if (step.role !== s.user.role && s.user.role !== 'owner') fail(403, 'This step requires ' + step.role + '.')
+            if (existing.created_by === s.user.id && s.user.role !== 'owner') fail(403, 'Another authorised approver must decide this request.')
+            const decisions = [...(existing.decisions as unknown[]), { step: existing.current_step, role: s.user.role, decision: input.decision, comment: input.comment, at: new Date().toISOString() }]
+            const last = existing.current_step + 1 >= steps.length
+            const status = input.decision === 'reject' ? 'rejected' : last ? 'approved' : 'pending'
+            const updated = (await c.query('UPDATE approval_requests SET decisions=$1,current_step=$2,status=$3,version=version+1,updated_at=now() WHERE tenant_id=$4 AND id=$5 RETURNING *', [JSON.stringify(decisions), input.decision === 'reject' ? existing.current_step : existing.current_step + 1, status, s.tenant, requestId])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'approval_' + input.decision, entity: existing.entity_id, detail: 'step ' + existing.current_step + ' -> ' + status })
+            return updated
+          })
+          return send(res, 200, row)
+        }
+        fail(405, 'Method not supported.')
+      }
+      const candidateRoute = path.match(/^\/api\/v1\/hr\/candidates(?:\/([0-9a-f-]+))?$/i)
+      const interviewRoute = path.match(/^\/api\/v1\/hr\/candidates\/([0-9a-f-]+)\/interviews$/i)
+      if (interviewRoute) {
+        if (!['owner', 'hr_admin', 'auditor'].includes(s.user.role)) fail(403, 'Your role cannot access recruitment.')
+        const candidateId = z.uuid().parse(interviewRoute[1])
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            interviews: (await c.query('SELECT * FROM candidate_interviews WHERE tenant_id=$1 AND candidate_id=$2 ORDER BY interview_at DESC,id', [s.tenant, candidateId])).rows,
+          })))
+        }
+        if (s.user.role === 'auditor') fail(403, 'Recruitment is read-only for auditors.')
+        const input = z.object({ interviewAt: z.string().datetime(), interviewers: z.string().trim().max(500).default(''), notes: z.string().trim().max(2000).default('') }).strict().parse(await body(req))
+        const row = await store.tenant(s.tenant, async (c) => {
+          const found = (await c.query('SELECT id FROM recruitment_candidates WHERE tenant_id=$1 AND id=$2', [s.tenant, candidateId])).rows[0]
+          if (!found) fail(404, 'Candidate not found.')
+          const created = (await c.query('INSERT INTO candidate_interviews(id,tenant_id,candidate_id,interview_at,interviewers,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [randomUUID(), s.tenant, candidateId, input.interviewAt, input.interviewers, input.notes])).rows[0]
+          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'candidate_interview_scheduled', entity: candidateId, detail: input.interviewAt })
+          return created
+        })
+        return send(res, 201, row)
+      }
+      if (candidateRoute && !interviewRoute) {
+        if (!['owner', 'hr_admin', 'auditor'].includes(s.user.role)) fail(403, 'Your role cannot access recruitment.')
+        const id = candidateRoute[1] ? z.uuid().parse(candidateRoute[1]) : undefined
+        if (req.method === 'GET' && !id) {
+          return send(res, 200, await store.tenant(s.tenant, async c => ({
+            candidates: (await c.query('SELECT * FROM recruitment_candidates WHERE tenant_id=$1 ORDER BY updated_at DESC,id', [s.tenant])).rows,
+          })))
+        }
+        if (s.user.role === 'auditor') fail(403, 'Recruitment is read-only for auditors.')
+        if (req.method === 'POST' && !id) {
+          const input = candidateInput.parse(await body(req))
+          const candidate = await store.tenant(s.tenant, async c => {
+            const row = (await c.query('INSERT INTO recruitment_candidates(id,tenant_id,name,email,position,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [randomUUID(),s.tenant,input.name,input.email,input.position,input.notes])).rows[0]
+            await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'candidate_created',entity:row.id,detail:input.position})
+            return row
+          })
+          return send(res,201,candidate)
+        }
+        if (req.method === 'PATCH' && id) {
+          const input = candidateUpdate.parse(await body(req))
+          const candidate = await store.tenant(s.tenant, async c => {
+            const row = (await c.query('SELECT * FROM recruitment_candidates WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[s.tenant,id])).rows[0]
+            if (!row) return fail(404,'Candidate not found.')
+            if (row.version !== input.version) fail(409,'Candidate changed. Refresh before updating.')
+            if (!canAdvanceCandidate(row.status,input.status)) fail(409,'This hiring stage transition is not allowed.')
+            const updated = (await c.query('UPDATE recruitment_candidates SET status=$1,version=version+1,updated_at=now() WHERE tenant_id=$2 AND id=$3 RETURNING *',[input.status,s.tenant,id])).rows[0]
+            await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'candidate_stage_updated',entity:id,detail:row.status+' -> '+input.status})
+            return updated
+          })
+          return send(res,200,candidate)
+        }
+        fail(405,'Method not supported.')
+      }
       const moduleRoute = path.match(
         /^\/api\/v1\/modules\/([a-z-]+)(?:\/([0-9a-f-]+))?$/i,
       )
@@ -2481,6 +3226,75 @@ export async function createApp(config: {
           return send(res, 200, { ok: true })
         }
       }
+      const outboxRoute = path.match(/^\/api\/v1\/notifications\/outbox$/i)
+      if (outboxRoute) {
+        if (req.method === 'GET') {
+          if (!['owner', 'auditor'].includes(s.user.role)) fail(403, 'Only the owner can inspect the delivery outbox.')
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            messages: (await c.query('SELECT id,channel,recipient,subject,status,attempts,provider,created_at FROM message_outbox WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100', [s.tenant])).rows,
+          })))
+        }
+        if (req.method === 'POST') {
+          if (!['owner', 'hr_admin', 'operations_manager', 'sales_crm_user', 'department_manager'].includes(s.user.role)) fail(403, 'Your role cannot queue notifications.')
+          const input = z.object({ channel: z.enum(['email', 'sms', 'whatsapp', 'push']), recipient: z.string().trim().min(1).max(320), subject: z.string().trim().max(200).default(''), body: z.string().trim().min(1).max(8000) }).strict().parse(await body(req))
+          const id = await store.tenant(s.tenant, async (c) => {
+            const queued = await queueMessage(c, s.tenant, input)
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'notification_queued', entity: 'notification', detail: input.channel })
+            return queued
+          })
+          return send(res, 201, { id, provider: 'local-log', signature: signDelivery(id) })
+        }
+      }
+      const deliverRoute = path.match(/^\/api\/v1\/notifications\/outbox\/([0-9a-f-]+)\/deliver$/i)
+      if (deliverRoute) {
+        if (!['owner', 'operations_manager'].includes(s.user.role)) fail(403, 'Only operations can run the delivery worker.')
+        const id = z.uuid().parse(deliverRoute[1])
+        const row = await store.tenant(s.tenant, async (c) => {
+          const existing = (await c.query('SELECT * FROM message_outbox WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, id])).rows[0]
+          if (!existing) fail(404, 'Queued message not found.')
+          const updated = (await c.query("UPDATE message_outbox SET status='sent',attempts=attempts+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [s.tenant, id])).rows[0]
+          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'notification_delivered', entity: id, detail: existing.channel })
+          return updated
+        })
+        return send(res, 200, { id: row.id, status: row.status })
+      }
+
+      const adminTenantRoute = new RegExp('^/api/v1/admin/tenants(?:/([0-9a-f-]+)/plan)?$','i').exec(path)
+      if(adminTenantRoute) {
+        if(s.user.role!=='super_admin')fail(403,'Platform administrator privileges required.')
+        if(req.method==='GET'&&!adminTenantRoute[1]) {
+          const query=new URL(req.url||'/','http://localhost').searchParams
+          const offset=z.coerce.number().int().min(0).max(1000000).parse(query.get('offset')||0)
+          const ids=await store.tenant(s.tenant,async c=>{
+            await ensureCurrent(c,s)
+            return (await c.query('SELECT DISTINCT tenant_id FROM users ORDER BY tenant_id LIMIT 100 OFFSET $1',[offset])).rows
+          })
+          const tenants=[]
+          for(const row of ids) {
+            const metadata=await store.tenant(row.tenant_id,async c=>(await c.query("SELECT id,state->>'organisation' AS name,state->>'currency' AS currency,plan_id,(SELECT count(*)::int FROM users WHERE tenant_id=tenants.id AND active=true) AS seats FROM tenants WHERE id=$1",[row.tenant_id])).rows[0])
+            if(metadata)tenants.push(metadata)
+          }
+          await store.tenant(s.tenant,async c=>{await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'tenant_directory_viewed',entity:'platform',detail:JSON.stringify({offset,count:tenants.length})})})
+          return send(res,200,{tenants,nextOffset:ids.length===100?offset+100:null})
+        }
+        if(req.method==='PATCH'&&adminTenantRoute[1]) {
+          const tenantId=z.uuid().parse(adminTenantRoute[1])
+          const input=z.object({planId:z.enum(['starter','business','business_pro','enterprise']),expectedPlanId:text}).strict().parse(await body(req))
+          await store.tenant(tenantId,async c=>{
+            await ensureCurrent(c,s)
+            const current=(await c.query('SELECT plan_id FROM tenants WHERE id=$1 FOR UPDATE',[tenantId])).rows[0]
+            if(!current)fail(404,'Tenant not found.')
+            if(current.plan_id!==input.expectedPlanId)fail(409,'Plan changed. Refresh the tenant directory.')
+            const plan=(await c.query('SELECT seat_limit FROM subscription_plans WHERE id=$1',[input.planId])).rows[0]
+            const seats=Number((await c.query('SELECT count(*)::int AS count FROM users WHERE tenant_id=$1 AND active=true',[tenantId])).rows[0].count)
+            if(seats>plan.seat_limit)fail(409,'Disable excess seats before assigning this plan.')
+            await c.query('UPDATE tenants SET plan_id=$1,version=version+1 WHERE id=$2',[input.planId,tenantId])
+            await store.append(c,tenantId,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'tenant_plan_assigned',entity:tenantId,detail:JSON.stringify({from:current.plan_id,to:input.planId})})
+          })
+          return send(res,200,{ok:true})
+        }
+        fail(405,'Method not supported.')
+      }
       if (path === '/api/v1/admin/overview') {
         if (s.user.role !== 'super_admin')
           fail(403, 'Admin privileges required.')
@@ -2539,7 +3353,7 @@ export async function createApp(config: {
           fail(403, 'Admin privileges required.')
         return send(res, 200, {
           settings: {
-            forecastingModel: 'Heuristic-Linear + Seasonal SARIMA v1.2',
+            forecastingModel: 'deterministic-rules-v1',
             confidenceThreshold: 0.85,
             dataCoverageMinimumDays: 30,
             anomalySensitivity: 'medium',

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type {Action,State,StockMovement} from './types'
 import {inventoryValue} from './inventory'
-const labels:Record<StockMovement['kind'],string>={baseline:'Opening snapshot',opening:'Product opening',receipt:'Purchase receipt',adjustment:'Adjustment',count:'Physical count'}
+const labels:Record<StockMovement['kind'],string>={baseline:'Opening snapshot',opening:'Product opening',receipt:'Purchase receipt',adjustment:'Adjustment',count:'Physical count',fulfillment:'Customer fulfillment',return:'Customer return'}
 export function StockPanel({state,search,busy,readOnly,onCommit,onPurchasing}:{state:State;search:string;busy:boolean;readOnly:boolean;onCommit:(a:Action)=>Promise<boolean>;onPurchasing:()=>void}){
  const [mode,setMode]=useState<'stock_adjust'|'stock_count'>('stock_adjust'),[product,setProduct]=useState(''),[expected,setExpected]=useState<number|null>(null),[quantity,setQuantity]=useState(''),[reason,setReason]=useState(''),[kind,setKind]=useState('all')
  const p=state.products.find(p=>p.id===product),number=quantity.trim()===''?null:Number(quantity),after=number===null||expected===null?null:mode==='stock_count'?number:expected+number,delta=after===null||expected===null?null:after-expected

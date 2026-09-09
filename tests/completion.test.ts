@@ -99,6 +99,17 @@ test('journal statements distinguish stock purchases, revenue, collections and p
   })
   assert.equal(generateBalanceSheet(state).isBalanced, false)
 })
+test('fulfillment reduces stock once and posts a matching COGS entry', () => {
+  let state = seed()
+  const before = state.products.find((product) => product.id === 'p1')!
+  state = transition(state, { type: 'stock_fulfill', data: { product: 'p1', quantity: 3, expectedQty: before.qty, reference: 'SO-9001' } })
+  assert.equal(state.products.find((product) => product.id === 'p1')!.qty, before.qty - 3)
+  assert.equal(state.stockMovements[0].kind, 'fulfillment')
+  assert.equal(state.stockMovements[0].valueDelta, -3 * before.cost)
+  assert.equal(generateIncomeStatement(state).cogs, 3 * before.cost)
+  assert.equal(generateBalanceSheet(state).isBalanced, true)
+  assert.throws(() => transition(state, { type: 'stock_fulfill', data: { product: 'p1', quantity: 99, expectedQty: before.qty - 3, reference: 'SO-9002' } }))
+})
 test('2026 payroll has progressive bands, pension, preserved inputs and no draft payslips', () => {
   assert.equal(calculateStatutoryPayroll(70000).payeTax, 0)
   const calc = calculateStatutoryPayroll(350000)

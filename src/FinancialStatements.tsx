@@ -7,7 +7,13 @@ import {
 import type { State } from './types'
 import { reportingPeriod } from './reporting'
 
-export function FinancialStatements({ state, connected = false }: { state: State; connected?: boolean }) {
+export function FinancialStatements({
+  state,
+  connected = false,
+}: {
+  state: State
+  connected?: boolean
+}) {
   const [tab, setTab] = useState('income')
   const [from, setFrom] = useState(''),
     [to, setTo] = useState('')
@@ -63,7 +69,26 @@ export function FinancialStatements({ state, connected = false }: { state: State
           Enter valid dates with the start on or before the end.
         </p>
       )}
-      {parsed.success && connected && <a href={`${(import.meta.env.VITE_API_URL || '').replace(/\/$/, '')}/api/v1/finance/export.csv?${new URLSearchParams(period)}`} target="_blank" rel="noreferrer">Export this period (CSV)</a>}
+      {parsed.success && connected && (
+        <div className="operations-fields">
+          {['csv', 'xlsx', 'pdf'].map((format) => (
+            <a
+              key={format}
+              href={
+                (import.meta.env.VITE_API_URL || '').replace(/\/$/, '') +
+                '/api/v1/finance/export.' +
+                format +
+                '?' +
+                new URLSearchParams(period)
+              }
+              target="_blank"
+              rel="noreferrer"
+            >
+              Export this period ({format.toUpperCase()})
+            </a>
+          ))}
+        </div>
+      )}
       <p>
         Balance sheet includes all postings through the end date. Cash opening
         balance includes earlier cash movements.

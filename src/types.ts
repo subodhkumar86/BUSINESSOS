@@ -87,7 +87,7 @@ export interface StockMovement {
  product:string
  productName:string
  sku:string
- kind:'baseline'|'opening'|'receipt'|'adjustment'|'count'
+ kind:'baseline'|'opening'|'receipt'|'adjustment'|'count'|'fulfillment'|'return'
  before:number
  delta:number
  after:number
@@ -164,6 +164,7 @@ const roleCollections: Record<UserRole, readonly string[]> = {
     'tasks',
     'stock_adjust',
     'stock_count',
+    'stock_fulfill',
     'warehouse',
     'suppliers',
     'assets',

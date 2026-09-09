@@ -178,3 +178,30 @@ See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current verified wo
 To exercise account recovery locally, set RETURN_RESET_TOKEN=true in your local environment and restart the API. On the sign-in screen choose Forgot password, enter an existing account email, and request a code. The development response opens the reset form. You can also open /reset-password and paste a code. Codes expire after 30 minutes and are single-use; a successful reset invalidates existing sessions. Production never returns these codes. Email delivery still needs an adapter.
 
 Billing shows configured feature access and the active-seat limit, not proof of payment. Adding or reactivating users at capacity returns an actionable error. Tenant owners cannot provision platform super-admin accounts.
+
+## Workflow and administration additions
+
+Run `npm.cmd run db:migrate` before starting an existing database after pulling these changes. Migration 024 adds the HR, appointments, compliance and knowledge workflows. See `WORKFLOW_CONTRACTS.md` for schemas, permissions and lifecycle rules.
+
+- HR: recruitment, leave requests and measurable performance goals.
+- Front Office: real appointment records with room conflict prevention.
+- Compliance: certifications/policies and corrective-action findings.
+- Support: knowledge article drafting/publication/archive.
+- Finance: CSV and XLSX period exports.
+- Platform Admin: real tenant metadata and subscription configuration. Provision super-admin accounts only through trusted administrative tooling; tenant owners cannot grant that role.
+
+The current implementation status and remaining PRD requirements are maintained in `IMPLEMENTATION_STATUS.md`.
+
+Warehouse **Shipments** connects picking → packing → dispatch to inventory and COGS. Choose a product and source location (or explicitly unallocated stock). Stock is checked at dispatch; insufficient stock prevents the entire posting. Apply migration 025 before using the updated API. See `WORKFLOW_CONTRACTS.md` for lifecycle, concurrency and retry rules.
+
+## Completion expansion — 9 September 2026
+
+Run `npm.cmd run db:migrate` first; migrations `027-029` add branches, approval chains/requests, forecast runs, the notification outbox and interview/file-object tables.
+
+- Finance exports now include deterministic server-generated **PDF** alongside CSV/XLSX (`GET /api/v1/finance/export.pdf`), with the same period scoping, role checks and export audits.
+- Forecasts are reproducible: `POST /api/v1/ai/forecast` persists `model_version=deterministic-rules-v2`, horizon, baseline, assumptions, confidence, data window and feature snapshot; `GET /api/v1/ai/forecasts[/:id]` re-reads the stored run.
+- Configurable multi-step approvals: `GET/POST/PATCH /api/v1/approvals/chains` plus `GET/POST/PATCH /api/v1/approvals/requests` with default PO/payroll/payment chains, amount matching, role-step enforcement, separation of duties and audited decisions.
+- Branches: `GET/POST/PATCH /api/v1/branches` with unique codes and optimistic versions for BUS-012 scoping.
+- Recruitment interviews: `GET/POST /api/v1/hr/candidates/:id/interviews` with scheduling, scoring schema and audit events.
+- Notification adapters: `POST/GET /api/v1/notifications/outbox` queues email/SMS/WhatsApp/push through a provider interface (`NOTIFY_PROVIDER`, default `local-log`), and `POST /.../:id/deliver` runs the audited local delivery worker. External credentials are not required and nothing is sent outside the database.
+- New **Approvals & Branches** workspace screen manages branches, chains, forecast runs, the outbox and pending approvals in one place.

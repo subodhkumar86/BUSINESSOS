@@ -449,6 +449,16 @@ export function transition(state: State, action: Action): State {
     source=movement.id
     if(movement.delta<0)post(-movement.valueDelta,'Inventory adjustment expense','Inventory')
     if(movement.delta>0)post(movement.valueDelta,'Inventory','Inventory adjustment gain')
+  } else if(action.type==='stock_fulfill'){
+    const result=z.object({product:textValue,quantity:quantity.refine(n=>n>0,'Quantity must be positive.'),expectedQty:quantity,reference:z.string().trim().min(1).max(200)}).strict().safeParse(action.data)
+    if(!result.success)throw Error(result.error.issues.map(i=>i.path.join('.')+': '+i.message).join('; '))
+    const data=result.data,p=s.products.find(item=>item.id===data.product)
+    if(!p)throw Error('Product not found in this workspace.')
+    if(p.qty!==data.expectedQty)throw Error('Stock changed since this fulfillment was prepared. Review the latest quantity before dispatching.')
+    if(p.qty<data.quantity)throw Error('Insufficient stock available for this fulfillment.')
+    const movement=stockMovement(p,p.qty,p.qty-data.quantity,'fulfillment','Dispatched for '+data.reference,id,date)
+    p.qty=movement.after;s.stockMovements.unshift(movement);source=movement.id
+    post(-movement.valueDelta,'Cost of goods sold','Inventory')
   } else if (action.type === 'payroll') {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(action.period || ''))
       throw Error('Select a valid payroll period.')

@@ -1,5 +1,17 @@
+import { CompletionPanel } from './CompletionPanel'
+import { WorkflowPanel } from './WorkflowPanel'
+import { RecruitmentPanel } from './RecruitmentPanel'
 import { BillingPanel } from './BillingPanel'
-import { WarehouseTransfers } from './WarehouseTransfers'
+import { WarehousePanel } from './WarehousePanel'
+import { SuppliersPanel } from './SuppliersPanel'
+import { DocumentsPanel } from './DocumentsPanel'
+import { SupportPanel } from './SupportPanel'
+import { TaxPanel } from './TaxPanel'
+import { SupplyChainPanel } from './SupplyChainPanel'
+import { AutomationPanel } from './AutomationPanel'
+import { VirtualWorkspace } from './VirtualWorkspace'
+import { NotificationsBell } from './NotificationsBell'
+import { NavIcon } from './NavIcon'
 import { includesFeature, pageFeature } from './entitlements'
 import { Payslips } from './Payslips'
 import { FinancialStatements } from './FinancialStatements'
@@ -19,6 +31,7 @@ import { request, saveAction, ApiError } from './api'
 import { Team } from './Team'
 import { hydrateInventory } from './inventory'
 import { StockPanel } from './StockPanel'
+import { FulfillmentPanel } from './FulfillmentPanel'
 import { Security } from './Security'
 import { RoleMatrix } from './RoleMatrix'
 import { AdminConsole } from './AdminConsole'
@@ -45,48 +58,11 @@ interface BankTransaction {
   matched_entity_id: string | null
   reconciled_at: string | null
 }
-interface DocumentRecord {
-  id: string
-  filename: string
-  mime_type: string
-  size_bytes: number
-  storage_key: string
-  version: number
-  status: 'active' | 'archived'
-  uploaded_by: string
-  created_at: string
-  updated_at: string
-}
-interface SupportTicket {
-  id: string
-  ticket_number: string
-  subject: string
-  customer: string
-  priority: 'low' | 'medium' | 'high' | 'urgent'
-  status: 'open' | 'pending' | 'resolved' | 'closed'
-  sla_due_at: string | null
-}
-interface TaxFiling {
-  id: string
-  name: string
-  territory: string
-  due_date: string
-  amount: number
-  status: 'draft' | 'ready' | 'filed' | 'paid' | 'overdue'
-}
-interface WarehouseLocation {
-  id: string
-  name: string
-  code: string
-  status: 'active' | 'inactive'
-}
-interface Supplier {
-  id: string
-  name: string
-  contact: string
-  lead_days: number
-  status: 'active' | 'review' | 'inactive'
-}
+
+
+
+
+
 interface PayrollPaymentBatch {
   id: string
   payroll_run_id: string
@@ -95,16 +71,7 @@ interface PayrollPaymentBatch {
   created_at: string
   updated_at: string
 }
-interface ModuleRecord {
-  id: string
-  module: string
-  name: string
-  detail: string
-  status: string
-  metadata: Record<string, unknown>
-  created_at: string
-  updated_at: string
-}
+
 const pages: [string, string, string, string][] = [
   ['dashboard', 'Overview', '◫', 'CORE'],
   ['finance', 'Finance & AR/AP', '₦', 'CORE'],
@@ -128,208 +95,11 @@ const pages: [string, string, string, string][] = [
   ['supply', 'Supply Chain', '⇄', 'OPERATIONS'],
   ['compliance', 'Compliance & Risk', '✓', 'GOVERNANCE'],
   ['billing', 'Billing & Plans', '$', 'GOVERNANCE'],
+  ['completion', 'Approvals & Branches', '✓', 'GOVERNANCE'],
   ['ai', 'BI & AI Intelligence', '✧', 'INTELLIGENCE'],
   ['admin', 'Platform Admin', '🛡', 'PLATFORM'],
   ['settings', 'Settings & Security', '⚙', 'GOVERNANCE'],
 ]
-const previewConfigs: Record<
-  string,
-  {
-    eyebrow: string
-    title: string
-    description: string
-    stats: [string, string, string][]
-    primaryTitle: string
-    primaryItems: [string, string, string][]
-    secondaryTitle: string
-    secondaryItems: [string, string][]
-  }
-> = {
-  billing: {
-    eyebrow: 'REVENUE OPERATIONS',
-    title: 'Package the value you create.',
-    description: 'Plans, usage, invoices, and entitlements in one operating view.',
-    stats: [['Current plan', 'Business', 'Monthly subscription'], ['Seats', '8 / 12', 'Four seats available'], ['Next invoice', '30 Sep', 'Estimated NGN 180,000']],
-    primaryTitle: 'Plan usage',
-    primaryItems: [['Finance & CRM', 'Included', '100%'], ['Inventory records', '248 / 1,000', '25%'], ['Team seats', '8 / 12', '67%']],
-    secondaryTitle: 'Billing readiness',
-    secondaryItems: [['Payment method', 'Not connected'], ['Tax invoice profile', 'Needs review'], ['Entitlements', 'Server resolution pending']],
-  },
-  documents: {
-    eyebrow: 'DOCUMENTS & MEDIA',
-    title: 'Keep the source of truth close.',
-    description: 'Contracts, receipts, policies, and versions organized by workspace.',
-    stats: [['Files', '36', 'Across 5 folders'], ['Storage', '1.8 GB', 'Of 10 GB included'], ['Needs review', '4', 'Awaiting an owner']],
-    primaryTitle: 'Recent documents',
-    primaryItems: [['Supplier agreement.pdf', 'Procurement', 'Updated today'], ['September payroll policy.docx', 'People', 'Updated yesterday'], ['Northstar proposal.pdf', 'Sales', 'Updated 3 days ago']],
-    secondaryTitle: 'Storage status',
-    secondaryItems: [['Object storage', 'Connection pending'], ['Version history', 'Ready for API'], ['Access controls', 'Tenant scoped']],
-  },
-  automation: {
-    eyebrow: 'WORKFLOWS',
-    title: 'Let routine work move itself.',
-    description: 'Triggers, approvals, notifications, and scheduled actions.',
-    stats: [['Active workflows', '6', '2 need attention'], ['Runs this month', '184', '96% successful'], ['Time saved', '21h', 'Estimated this month']],
-    primaryTitle: 'Workflow library',
-    primaryItems: [['Low stock alert', 'Inventory', 'Active'], ['Invoice follow-up', 'Finance', 'Active'], ['New hire checklist', 'People', 'Draft']],
-    secondaryTitle: 'Delivery health',
-    secondaryItems: [['Notifications', 'Provider pending'], ['Scheduled jobs', 'Redis queue ready'], ['Last failure', 'None in 7 days']],
-  },
-  warehouse: {
-    eyebrow: 'OPERATIONS',
-    title: 'Move goods with confidence.',
-    description: 'Locations, fulfillment, returns, and stock visibility across the network.',
-    stats: [['Locations', '3', '1 needs a cycle count'], ['Open picks', '18', '6 due today'], ['On-time dispatch', '94%', 'Last 30 days']],
-    primaryTitle: 'Fulfillment queue',
-    primaryItems: [['SO-1048 · Northstar', 'Picking', 'Due today'], ['SO-1047 · Greenfield', 'Packed', 'Carrier pending'], ['RTN-003 · Dock station', 'Inspection', 'Needs decision']],
-    secondaryTitle: 'Warehouse controls',
-    secondaryItems: [['Costing method', 'Recorded unit cost'], ['Bin tracking', 'Backend connection pending'], ['Returns workflow', 'Ready for API']],
-  },
-  support: {
-    eyebrow: 'CUSTOMER EXPERIENCE',
-    title: 'Make every request accountable.',
-    description: 'Tickets, SLAs, knowledge, and customer feedback in one queue.',
-    stats: [['Open tickets', '14', '3 breaching SLA'], ['First response', '2h 18m', 'This month'], ['CSAT', '4.6 / 5', 'Last 30 days']],
-    primaryTitle: 'Priority queue',
-    primaryItems: [['#2048 · Delivery update', 'Northstar Limited', 'High'], ['#2046 · Invoice copy', 'Greenfield Studio', 'Medium'], ['#2042 · Product exchange', 'Lagos Office', 'Medium']],
-    secondaryTitle: 'Support channels',
-    secondaryItems: [['Email inbox', 'Connection pending'], ['Knowledge base', '12 articles'], ['Escalations', '3 active']],
-  },
-  tax: {
-    eyebrow: 'COMPLIANCE FINANCE',
-    title: 'Stay ready for the next filing.',
-    description: 'Tax rules, exemptions, deductions, and filing preparation by territory.',
-    stats: [['Next deadline', '21 days', 'VAT return · September'], ['Tax collected', 'NGN 0', 'No rules configured'], ['Exceptions', '2', 'Need accountant review']],
-    primaryTitle: 'Filing calendar',
-    primaryItems: [['VAT return · September', 'Nigeria', 'Due 21 Sep'], ['PAYE schedule · September', 'Nigeria', 'Due 10 Oct'], ['Annual return', 'Nigeria', 'Due 31 Mar']],
-    secondaryTitle: 'Tax setup',
-    secondaryItems: [['Territory rules', 'Not configured'], ['Tax registration', 'Needs review'], ['Remittance provider', 'Not connected']],
-  },
-  supply: {
-    eyebrow: 'SUPPLY NETWORK',
-    title: 'Plan the next shipment early.',
-    description: 'Suppliers, lead times, demand signals, and logistics cost in one view.',
-    stats: [['Active suppliers', '12', '2 need review'], ['Inbound orders', '7', 'NGN 4.2m committed'], ['At-risk SKUs', '5', 'Below lead-time cover']],
-    primaryTitle: 'Supplier watchlist',
-    primaryItems: [['Docking stations · Kora Imports', '14 day lead time', 'On track'], ['Office monitors · Brightline', '21 day lead time', 'At risk'], ['Keyboard stock · TechHub', '7 day lead time', 'On track']],
-    secondaryTitle: 'Planning signals',
-    secondaryItems: [['Demand forecast', 'Needs history'], ['Carrier integrations', 'Not connected'], ['Multi-warehouse view', 'Ready for API']],
-  },
-  compliance: {
-    eyebrow: 'RISK & GOVERNANCE',
-    title: 'Make controls visible.',
-    description: 'Policies, certifications, risks, findings, and corrective actions.',
-    stats: [['Open risks', '5', '1 critical'], ['Controls tested', '18 / 24', 'This quarter'], ['Policies due', '3', 'Within 30 days']],
-    primaryTitle: 'Risk register',
-    primaryItems: [['Bank feed credentials', 'Finance', 'Mitigate'], ['Supplier concentration', 'Supply chain', 'Monitor'], ['Payroll access review', 'People', 'Due soon']],
-    secondaryTitle: 'Assurance status',
-    secondaryItems: [['Audit trail', 'Append-only'], ['Policy library', 'Connection pending'], ['Certifications', '2 expiring soon']],
-  },
-  workspace: {
-    eyebrow: 'COLLABORATION',
-    title: 'Turn work into momentum.',
-    description: 'Priorities, dependencies, shared notes, templates, and team context.',
-    stats: [['Active projects', '8', '2 at risk'], ['Open tasks', '42', '11 due this week'], ['Templates', '9', '3 shared']],
-    primaryTitle: 'Team focus',
-    primaryItems: [['Launch Abuja branch', 'Operations', '62% complete'], ['September stock audit', 'Finance', 'Starts tomorrow'], ['Northstar renewal', 'Sales', 'Needs owner']],
-    secondaryTitle: 'Collaboration status',
-    secondaryItems: [['Comments', '18 this week'], ['Shared documents', '36 files'], ['Dependencies', '4 blocked']],
-  },
-  admin: {
-    eyebrow: 'PLATFORM CONTROL',
-    title: 'Operate the workspace responsibly.',
-    description: 'Users, integrations, entitlements, audit events, and system health.',
-    stats: [['Team members', '8', '1 inactive'], ['Integrations', '2', '1 needs attention'], ['System health', 'Good', 'Last checked now']],
-    primaryTitle: 'Administration queue',
-    primaryItems: [['Review auditor access', 'Security', '2 accounts'], ['Connect notification provider', 'Integrations', 'Pending'], ['Review plan entitlements', 'Billing', 'Needs owner']],
-    secondaryTitle: 'Platform status',
-    secondaryItems: [['Database', 'PostgreSQL ready'], ['Sessions', 'Redis ready'], ['Backups', 'Restore API pending']],
-  },
-  assets: {
-    eyebrow: 'CAPITAL ASSETS',
-    title: 'Track equipment value and maintenance.',
-    description: 'Asset registration, serials, purchase cost, location, depreciation, and service schedules.',
-    stats: [['Registered assets', '34', 'NGN 48.2m gross book value'], ['Depreciation YTD', 'NGN 4.6m', 'Straight-line method'], ['Maintenance due', '3', 'Within next 14 days']],
-    primaryTitle: 'Asset register',
-    primaryItems: [
-      ['MacBook Pro 16 M3 (Asset-001)', 'Engineering · SN: C02X8892', 'Operational · NGN 3,200,000'],
-      ['Dell Precision Workstation (Asset-002)', 'Design · SN: DL-889104', 'Operational · NGN 2,100,000'],
-      ['Warehouse Forklift Toyota 8FBE (Asset-003)', 'Logistics · SN: TY-552109', 'Maintenance · NGN 12,500,000'],
-    ],
-    secondaryTitle: 'Depreciation policy',
-    secondaryItems: [['Method', 'Straight-line 20% p.a.'], ['Tax treatment', 'Capital allowance schedule'], ['Disposal audit', 'Required by policy']],
-  },
-  facilities: {
-    eyebrow: 'FACILITY OPERATIONS',
-    title: 'Keep physical operations resilient.',
-    description: 'Equipment condition monitoring, maintenance work orders, safety inspections, and incident logs.',
-    stats: [['Operating facilities', '2', 'Lagos HQ & Abuja Hub'], ['Open work orders', '4', '1 high priority'], ['Safety compliance', '98%', 'Last inspection green']],
-    primaryTitle: 'Facility work orders',
-    primaryItems: [
-      ['Main Office HVAC Unit #1', 'Facility: Lagos HQ · Condition: Good', 'Next check: 15 Oct'],
-      ['Backup Generator CAT 250kVA', 'Power Backup · Condition: Fair', 'Oil change due in 10 days'],
-      ['Abuja Warehouse Roller Shutter', 'Security / Access · Condition: Operational', 'Inspected yesterday'],
-    ],
-    secondaryTitle: 'Inspection status',
-    secondaryItems: [['Fire safety certificate', 'Valid until Dec 2026'], ['Power backup SLA', '99.9% uptime target'], ['Environmental audit', 'Passed Q3 inspection']],
-  },
-  production: {
-    eyebrow: 'MANUFACTURING & QUALITY',
-    title: 'Schedule workflows and protect margins.',
-    description: 'Production batches, machinery allocation, raw material consumption, and defect rates.',
-    stats: [['Active batches', '3', 'Assembly lines 1 & 2'], ['Throughput rate', '94.2%', 'On-schedule target'], ['Defect rate', '0.4%', 'Below 1.0% tolerance']],
-    primaryTitle: 'Production batches',
-    primaryItems: [
-      ['Batch #PR-2026-088 · Keyboards', 'Assembly line 2 · 500 units', 'In progress · 64%'],
-      ['Batch #PR-2026-089 · Docking Stations', 'SMT line 1 · 200 units', 'Scheduled · Material ready'],
-      ['Batch #PR-2026-087 · Monitor Mounts', 'QA Passed · 150 units', 'Completed · 0 defects'],
-    ],
-    secondaryTitle: 'Capacity utilization',
-    secondaryItems: [['Assembly Line 1', '78% capacity utilized'], ['Assembly Line 2', '91% capacity utilized'], ['Raw material buffer', '18 days cover']],
-  },
-  frontoffice: {
-    eyebrow: 'FRONT OFFICE & GUESTS',
-    title: 'Make every visit professional.',
-    description: 'Visitor check-in, appointments calendar, meeting rooms, deliveries, and inquiries.',
-    stats: [['Today visitors', '7', '4 checked in'], ['Meeting rooms', '3 / 4', '75% booked'], ['Pending inquiries', '2', 'Avg wait: 4 mins']],
-    primaryTitle: 'Visitor register',
-    primaryItems: [
-      ['Amina Bello · Kora Imports', 'Meeting Host: Amara Okafor · Room A', 'Checked in · 10:30 AM'],
-      ['David Eze · Greenfield Audit', 'Meeting Host: Finance Lead · Boardroom', 'Scheduled · 2:00 PM'],
-      ['Courier Delivery · Express Logistics', 'Front Desk Receiving', 'Completed · 9:15 AM'],
-    ],
-    secondaryTitle: 'Reception controls',
-    secondaryItems: [['Visitor NDA', 'Digital signature active'], ['Security badge printer', 'Online'], ['Calendar sync', 'Google/Outlook connected']],
-  },
-  banking: {
-    eyebrow: 'CASH & TREASURY',
-    title: 'Real-time bank synchronization & reconciliation.',
-    description: 'Automated statement sync, rule-based matching engine, and cash position reconciliation.',
-    stats: [['Connected accounts', '2 accounts', 'Access Bank & Zenith'], ['Unreconciled', '2 items', 'Needs review'], ['Auto-match rate', '92%', 'Rule engine confidence']],
-    primaryTitle: 'Transaction feeds',
-    primaryItems: [
-      ['Access Bank Corporate (0029381920)', 'Open Banking API adapter', 'Active · NGN 5,420,000'],
-      ['Zenith Bank Operations (1019283741)', 'Direct Feed Adapter', 'Active · NGN 1,850,000'],
-      ['Reconciliation Matching Engine', '14 auto-matched, 2 pending review', 'Live rule matcher'],
-    ],
-    secondaryTitle: 'Banking connectivity',
-    secondaryItems: [['Open Banking API', 'Central Bank compliant'], ['Webhook verification', 'HMAC-SHA256 active'], ['Replay protection', 'Idempotency verified']],
-  },
-  suppliers: {
-    eyebrow: 'VENDOR MANAGEMENT',
-    title: 'Source reliably and negotiate with data.',
-    description: 'Supplier directory, lead times, compliance ratings, and order history.',
-    stats: [['Active suppliers', '12', '10 approved'], ['Avg lead time', '12.4 days', 'On-time delivery 91%'], ['Committed spend', 'NGN 8.4m', 'Active purchase orders']],
-    primaryTitle: 'Approved suppliers',
-    primaryItems: [
-      ['Docking stations · Kora Imports', '14 day lead time', 'On track'],
-      ['Office monitors · Brightline', '21 day lead time', 'At risk'],
-      ['Keyboard stock · TechHub', '7 day lead time', 'On track'],
-    ],
-    secondaryTitle: 'Vendor compliance',
-    secondaryItems: [['Tax identification', 'All active verified'], ['Bank account verification', 'Completed'], ['Standard payment terms', 'Net 30 days']],
-  },
-}
 const definitions: Record<
   CreateCollection,
   [string, [string, string, string?][]]
@@ -430,20 +200,15 @@ function App({
     [answer, setAnswer] = useState(''),
     [aiLineage, setAiLineage] = useState(''),
     [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]),
+    [selectedBankAccountId, setSelectedBankAccountId] = useState(''),
+    [bankStatusFilter, setBankStatusFilter] = useState<'all' | BankTransaction['match_status']>('all'),
+    [manualMatches, setManualMatches] = useState<Record<string, string>>({}),
     [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]),
     [bankLoading, setBankLoading] = useState(false),
-    [moduleRecords, setModuleRecords] = useState<ModuleRecord[]>([]),
-    [moduleLoaded, setModuleLoaded] = useState(false),
-    [documents, setDocuments] = useState<DocumentRecord[]>([]),
-    [tickets, setTickets] = useState<SupportTicket[]>([]),
-    [filings, setFilings] = useState<TaxFiling[]>([]),
-    [locations, setLocations] = useState<WarehouseLocation[]>([]),
-    [suppliers, setSuppliers] = useState<Supplier[]>([]),
     [paymentBatches, setPaymentBatches] = useState<Record<string, PayrollPaymentBatch>>({}),
     [auditLogs, setAuditLogs] = useState<Audit[]>([])
   const saving = useRef(false),
-    [busy, setBusy] = useState(false),
-    documentPicker = useRef<HTMLInputElement>(null)
+    [busy, setBusy] = useState(false)
   const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null)
   const effectiveRole: UserRole = simulatedRole || remote?.user.role || 'owner'
   const readOnly = effectiveRole === 'auditor'
@@ -454,11 +219,33 @@ function App({
         currency: s.currency,
         maximumFractionDigits: 0,
       }).format(Number(v))
+  const activeBankAccount =
+    bankAccounts.find((account) => account.id === selectedBankAccountId) ||
+    bankAccounts[0]
+  const reconciliationSources = (transaction: BankTransaction) =>
+    transaction.direction === 'credit'
+      ? s.invoices
+          .filter(
+            (invoice) =>
+              invoice.status === 'Unpaid' && invoice.amount === Math.abs(transaction.amount),
+          )
+          .map((invoice) => ({ id: invoice.id, label: `Invoice · ${invoice.name}` }))
+      : s.expenses
+          .filter((expense) => expense.amount === Math.abs(transaction.amount))
+          .map((expense) => ({ id: expense.id, label: `Expense · ${expense.name}` }))
+  const visibleBankTransactions =
+    bankStatusFilter === 'all'
+      ? bankTransactions
+      : bankTransactions.filter((transaction) => transaction.match_status === bankStatusFilter)
+  const statementCredits = bankTransactions
+    .filter((transaction) => transaction.direction === 'credit')
+    .reduce((total, transaction) => total + Number(transaction.amount), 0)
+  const statementDebits = bankTransactions
+    .filter((transaction) => transaction.direction === 'debit')
+    .reduce((total, transaction) => total + Number(transaction.amount), 0)
   useEffect(() => {
     const listener = () => {
       setPage(location.pathname.split('/').pop() || 'dashboard')
-      setModuleRecords([])
-      setModuleLoaded(false)
     }
     window.addEventListener('popstate', listener)
     return () => window.removeEventListener('popstate', listener)
@@ -467,11 +254,16 @@ function App({
     if (!remote || (page !== 'finance' && page !== 'banking') || !['owner', 'finance_admin', 'auditor'].includes(effectiveRole))
       return
     let active = true
+    setBankLoading(true)
     request<{ accounts: BankAccount[] }>('/banks/accounts')
       .then((data) => {
         if (!active) return
         setBankAccounts(data.accounts)
-        const account = data.accounts[0]
+        const account =
+          data.accounts.find((item) => item.id === selectedBankAccountId) ||
+          data.accounts[0]
+        if (account && account.id !== selectedBankAccountId)
+          setSelectedBankAccountId(account.id)
         if (account)
           return request<{ transactions: BankTransaction[] }>(
             `/banks/accounts/${account.id}/transactions`,
@@ -488,50 +280,7 @@ function App({
     return () => {
       active = false
     }
-  }, [page, remote, effectiveRole])
-  useEffect(() => {
-    if (!remote || page !== 'documents') return
-    let active = true
-    request<{ documents: DocumentRecord[] }>('/documents')
-      .then((data) => {
-        if (active) {
-          setDocuments(data.documents)
-          setModuleLoaded(true)
-        }
-      })
-      .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : 'Could not load documents.')
-      })
-    return () => {
-      active = false
-    }
-  }, [page, remote])
-  useEffect(() => {
-    if (!remote || !includesFeature(remote.entitlements, pageFeature(page)) || !['support', 'tax', 'warehouse', 'supply'].includes(page)) return
-    let active = true
-    const path = page === 'support'
-      ? '/support/tickets'
-      : page === 'tax'
-        ? '/tax/filings'
-        : page === 'warehouse'
-          ? '/warehouse/locations'
-          : '/suppliers'
-    request<{ tickets?: SupportTicket[]; filings?: TaxFiling[]; locations?: WarehouseLocation[]; suppliers?: Supplier[] }>(path)
-      .then((data) => {
-        if (!active) return
-        if (page === 'support') setTickets(data.tickets || [])
-        else if (page === 'tax') setFilings(data.filings || [])
-        else if (page === 'warehouse') setLocations(data.locations || [])
-        else setSuppliers(data.suppliers || [])
-        setModuleLoaded(true)
-      })
-      .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : 'Could not load module records.')
-      })
-    return () => {
-      active = false
-    }
-  }, [page, remote])
+  }, [page, remote, effectiveRole, selectedBankAccountId])
   useEffect(() => {
     if (!remote || !includesFeature(remote.entitlements, 'operations') || page !== 'hr' || !['owner', 'hr_admin', 'auditor'].includes(remote.user.role)) return
     let active = true
@@ -565,31 +314,9 @@ function App({
       active = false
     }
   }, [page, remote])
-  useEffect(() => {
-    if (!remote || !includesFeature(remote.entitlements, pageFeature(page)) || !previewConfigs[page] || ['documents', 'support', 'tax', 'warehouse', 'supply', 'billing'].includes(page)) return
-    let active = true
-    const query = search.trim() ? `?q=${encodeURIComponent(search.trim())}` : ''
-    request<{ records: ModuleRecord[] }>(`/modules/${page}${query}`)
-      .then((data) => {
-        if (active) setModuleRecords(data.records)
-      })
-      .catch((e) => {
-        if (active) setError(e instanceof Error ? e.message : 'Could not load module records.')
-      })
-      .finally(() => {
-          if (active) {
-            setModuleLoaded(true)
-          }
-      })
-    return () => {
-      active = false
-    }
-  }, [page, remote, search])
   function navigate(id: string) {
     history.pushState({}, '', `/app/${id}`)
     setPage(id)
-    setModuleRecords([])
-    setModuleLoaded(false)
     setSearch('')
     setError('')
   }
@@ -772,43 +499,43 @@ function App({
   const titles: Record<string, [string, string]> = {
     dashboard: [
       'Run the business from one place.',
-      'Your people, money, and operations. One clear picture.',
+      'See what needs attention, what changed and what is likely to happen next.',
     ],
     finance: [
       'Know where the money is.',
-      'Track receivables, expenses, and balanced journal postings.',
+      'Connect accounts, reconcile transactions and manage the financial position.',
     ],
     inventory: [
-      'Every item. Every movement.',
+      'Know what you have and where it is.',
       'Monitor stock and receive approved purchases.',
     ],
     crm: [
-      'Turn opportunities into revenue.',
+      'Move opportunities to revenue.',
       'Keep the next conversation moving forward.',
     ],
     procurement: [
-      'Purchase with confidence.',
+      'Control purchasing from request to payment.',
       'From supplier request to approval and goods receipt.',
     ],
     hr: [
-      'Your people, well managed.',
+      'Manage people and pay accurately.',
       'Employee records and gross payroll approval.',
     ],
     projects: [
-      'Make progress visible.',
+      'Deliver work against time and budget.',
       'Keep projects and everyday work on track.',
     ],
     ai: [
-      'A clearer view of what comes next.',
-      'Calculated insights from your workspace records.',
+      'Ask the business data what is happening next.',
+      'Move from dashboards to explanations, forecasts and scenarios.',
     ],
     settings: [
-      'Make BusinessOS yours.',
+      'Control the organisation.',
       'Workspace preferences, data exports, and activity history.',
     ],
     billing: ['Turn growth into a system.', 'Plans, usage, and entitlements for the whole organisation.'],
     documents: ['Keep the source of truth close.', 'Contracts, receipts, policies, and versions in one place.'],
-    automation: ['Let routine work move itself.', 'Triggers, approvals, notifications, and scheduled actions.'],
+    automation: ['Review workflow rules.', 'Saved rules and manual review history.'],
     warehouse: ['Move goods with confidence.', 'Locations, fulfillment, returns, and stock visibility.'],
     support: ['Make every request accountable.', 'Tickets, service levels, knowledge, and feedback.'],
     tax: ['Stay ready for the next filing.', 'Rules, exemptions, deductions, and filing preparation.'],
@@ -816,7 +543,7 @@ function App({
     compliance: ['Make controls visible.', 'Policies, certifications, risks, findings, and actions.'],
     workspace: ['Turn work into momentum.', 'Priorities, dependencies, notes, and team context.'],
     admin: ['Operate the workspace responsibly.', 'Users, integrations, entitlements, and system health.'],
-    banking: ['Real-time cash and bank feeds.', 'Connect accounts, reconcile transactions, and match receipts.'],
+    banking: ['Bank accounts and reconciliation.', 'Connect accounts, reconcile transactions, and match receipts.'],
     suppliers: ['Vendor and partner management.', 'Contracts, lead-time tracking, compliance, and performance.'],
     assets: ['Track equipment value and maintenance.', 'Registration, serial numbers, depreciation, and service records.'],
     facilities: ['Keep physical operations resilient.', 'Equipment monitoring, work orders, safety compliance, and repairs.'],
@@ -852,6 +579,7 @@ function App({
       supply: ['operations_manager'],
       compliance: ['finance_admin', 'operations_manager', 'hr_admin', 'super_admin'],
       billing: ['finance_admin'],
+      completion: ['finance_admin', 'hr_admin', 'operations_manager'],
       ai: ['finance_admin', 'hr_admin', 'operations_manager', 'sales_crm_user'],
       settings: ['finance_admin', 'hr_admin', 'operations_manager', 'sales_crm_user', 'department_manager', 'employee'],
       admin: ['super_admin'],
@@ -860,237 +588,6 @@ function App({
   }
   const visiblePages = pages.filter(([id]) => canViewPage(id, effectiveRole))
   const current = titles[page] && canViewPage(page, effectiveRole) ? page : 'dashboard'
-  const preview = remote && current === 'billing' ? undefined : previewConfigs[current]
-  const primaryRecords: ModuleRecord[] = remote && moduleLoaded
-    ? current === 'documents'
-      ? documents.map((document) => ({
-          id: document.id,
-          module: 'documents',
-          name: document.filename,
-          detail: `${document.mime_type} · ${Math.ceil(document.size_bytes / 1024)} KB`,
-          status: document.status,
-          metadata: { storageKey: document.storage_key },
-          created_at: document.created_at,
-          updated_at: document.updated_at,
-        }))
-      : current === 'support'
-        ? tickets.map((ticket) => ({
-            id: ticket.id,
-            module: 'support',
-            name: `${ticket.ticket_number} · ${ticket.subject}`,
-            detail: ticket.customer,
-            status: ticket.status,
-            metadata: { priority: ticket.priority },
-            created_at: '',
-            updated_at: '',
-          }))
-        : current === 'tax'
-          ? filings.map((filing) => ({
-              id: filing.id,
-              module: 'tax',
-              name: filing.name,
-              detail: `${filing.territory} · due ${filing.due_date}`,
-              status: filing.status,
-              metadata: { amount: filing.amount },
-              created_at: '',
-              updated_at: '',
-            }))
-          : current === 'warehouse'
-            ? locations.map((location) => ({
-                id: location.id,
-                module: 'warehouse',
-                name: location.name,
-                detail: location.code,
-                status: location.status,
-                metadata: {},
-                created_at: '',
-                updated_at: '',
-              }))
-            : current === 'supply'
-              ? suppliers.map((supplier) => ({
-                  id: supplier.id,
-                  module: 'supply',
-                  name: supplier.name,
-                  detail: `${supplier.lead_days} day lead time · ${supplier.contact}`,
-                  status: supplier.status,
-                  metadata: {},
-                  created_at: '',
-                  updated_at: '',
-                }))
-          : moduleRecords
-    : (preview?.primaryItems || []).map(([name, detail, status], index) => ({
-        id: `preview-${index}`,
-        module: current,
-        name,
-        detail,
-        status,
-        metadata: {},
-        created_at: '',
-        updated_at: '',
-      }))
-  async function addPreviewRecord() {
-    if (!preview) return
-    if (!remote) {
-      setNotice(`${preview.primaryTitle} is ready for the backend connection.`)
-      return
-    }
-    try {
-      const created = await request<ModuleRecord>(`/modules/${current}`, {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': remote.csrf },
-        body: JSON.stringify({
-          name: `${preview.primaryTitle} · New item`,
-          detail: 'Created from the workspace',
-          status: 'Draft',
-        }),
-      })
-      setModuleRecords((records) => [created, ...records])
-      setNotice('New module record created and audited.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create module record.')
-    }
-  }
-  async function registerDocument(file: File) {
-    if (!remote) return
-    try {
-      const document = await request<DocumentRecord>('/documents', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': remote.csrf },
-        body: JSON.stringify({
-          filename: file.name,
-          mimeType: file.type || 'application/octet-stream',
-          sizeBytes: file.size,
-        }),
-      })
-      setDocuments((items) => [document, ...items])
-      setNotice('Document metadata registered. Configure object storage to upload the binary.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not register document.')
-    }
-  }
-  async function createSupportTicket(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!remote) return
-    const values = Object.fromEntries(new FormData(event.currentTarget))
-    try {
-      const ticket = await request<SupportTicket>('/support/tickets', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': remote.csrf },
-        body: JSON.stringify({
-          subject: values.subject,
-          customer: values.customer,
-          priority: values.priority,
-          slaDueAt: values.slaDueAt ? new Date(String(values.slaDueAt)).toISOString() : null,
-        }),
-      })
-      setTickets((items) => [ticket, ...items])
-      event.currentTarget.reset()
-      setNotice('Support ticket created and audited.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create support ticket.')
-    }
-  }
-  async function createTaxFiling(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!remote) return
-    const values = Object.fromEntries(new FormData(event.currentTarget))
-    try {
-      const filing = await request<TaxFiling>('/tax/filings', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': remote.csrf },
-        body: JSON.stringify({
-          name: values.name,
-          territory: values.territory,
-          dueDate: values.dueDate,
-          amount: Number(values.amount),
-        }),
-      })
-      setFilings((items) => [...items, filing].sort((a, b) => a.due_date.localeCompare(b.due_date)))
-      event.currentTarget.reset()
-      setNotice('Tax filing created and audited.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create tax filing.')
-    }
-  }
-  async function updatePreviewRecord(record: ModuleRecord, status: string) {
-    if (!remote || record.id.startsWith('preview-')) return
-    try {
-      const endpoint = current === 'documents'
-        ? `/documents/${record.id}`
-        : current === 'support'
-          ? `/support/tickets/${record.id}`
-          : current === 'tax'
-            ? `/tax/filings/${record.id}`
-              : current === 'warehouse'
-                ? `/warehouse/locations/${record.id}`
-                : current === 'supply'
-                  ? `/suppliers/${record.id}`
-            : `/modules/${current}/${record.id}`
-      await request(endpoint, {
-        method: 'PATCH',
-        headers: { 'X-CSRF-Token': remote.csrf },
-        body: JSON.stringify({ status }),
-      })
-      if (current === 'documents')
-        setDocuments((items) => items.map((item) => item.id === record.id ? { ...item, status: status as DocumentRecord['status'] } : item))
-      else if (current === 'support')
-        setTickets((items) => items.map((item) => item.id === record.id ? { ...item, status: status as SupportTicket['status'] } : item))
-      else if (current === 'tax')
-        setFilings((items) => items.map((item) => item.id === record.id ? { ...item, status: status as TaxFiling['status'] } : item))
-      else if (current === 'warehouse')
-        setLocations((items) => items.map((item) => item.id === record.id ? { ...item, status: status as WarehouseLocation['status'] } : item))
-      else if (current === 'supply')
-        setSuppliers((items) => items.map((item) => item.id === record.id ? { ...item, status: status as Supplier['status'] } : item))
-      else
-        setModuleRecords((records) => records.map((item) => item.id === record.id ? { ...item, status } : item))
-      setNotice('Module record updated and audited.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update module record.')
-    }
-  }
-  async function deletePreviewRecord(record: ModuleRecord) {
-    if (!remote || record.id.startsWith('preview-')) return
-    try {
-      const isArchive = ['documents', 'support', 'tax', 'warehouse', 'supply'].includes(current)
-      const endpoint = current === 'documents'
-        ? `/documents/${record.id}`
-        : current === 'support'
-          ? `/support/tickets/${record.id}`
-          : current === 'tax'
-            ? `/tax/filings/${record.id}`
-              : current === 'warehouse'
-                ? `/warehouse/locations/${record.id}`
-                : current === 'supply'
-                  ? `/suppliers/${record.id}`
-            : `/modules/${current}/${record.id}`
-      await request(endpoint, {
-        method: isArchive ? 'PATCH' : 'DELETE',
-        headers: { 'X-CSRF-Token': remote.csrf },
-        ...(isArchive ? { body: JSON.stringify({ status: current === 'documents' ? 'archived' : current === 'support' ? 'closed' : current === 'tax' ? 'paid' : 'inactive' }) } : {}),
-      })
-      if (current === 'documents') {
-        setDocuments((items) => items.map((item) => item.id === record.id ? { ...item, status: 'archived' } : item))
-        setNotice('Document archived and audited.')
-      } else if (current === 'support') {
-        setTickets((items) => items.map((item) => item.id === record.id ? { ...item, status: 'closed' } : item))
-        setNotice('Support ticket closed and audited.')
-      } else if (current === 'tax') {
-        setFilings((items) => items.map((item) => item.id === record.id ? { ...item, status: 'paid' } : item))
-        setNotice('Tax filing marked paid and audited.')
-      } else if (current === 'warehouse') {
-        setLocations((items) => items.map((item) => item.id === record.id ? { ...item, status: 'inactive' } : item))
-        setNotice('Warehouse location deactivated and audited.')
-      } else if (current === 'supply') {
-        setSuppliers((items) => items.map((item) => item.id === record.id ? { ...item, status: 'inactive' } : item))
-        setNotice('Supplier deactivated and audited.')
-      } else {
-        setModuleRecords((records) => records.filter((item) => item.id !== record.id))
-        setNotice('Module record deleted and audited.')
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not delete module record.')
-    }
-  }
   function handleAiQuestion(qText: string) {
     const q = qText.toLowerCase()
     const monthlySalaries = s.employees.reduce((a, x) => a + x.amount, 0)
@@ -1149,13 +646,13 @@ function App({
         <nav>
           {visiblePages
             .filter(([, , , cat]) => cat === 'CORE')
-            .map(([id, label, icon]) => (
+            .map(([id, label]) => (
               <button
                 className={current === id ? 'active' : ''}
                 onClick={() => navigate(id)}
                 key={id}
               >
-                <span>{icon}</span>
+                <NavIcon name={id} />
                 {label}
                 {id === 'inventory' && m.low.length > 0 && (
                   <em>{m.low.length}</em>
@@ -1169,13 +666,13 @@ function App({
             <nav>
               {visiblePages
                 .filter(([, , , cat]) => cat === 'OPERATIONS')
-                .map(([id, label, icon]) => (
+                .map(([id, label]) => (
                   <button
                     className={current === id ? 'active' : ''}
                     onClick={() => navigate(id)}
                     key={id}
                   >
-                    <span>{icon}</span>
+                    <NavIcon name={id} />
                     {label}
                   </button>
                 ))}
@@ -1188,13 +685,13 @@ function App({
             <nav>
               {visiblePages
                 .filter(([, , , cat]) => cat === 'GROWTH')
-                .map(([id, label, icon]) => (
+                .map(([id, label]) => (
                   <button
                     className={current === id ? 'active' : ''}
                     onClick={() => navigate(id)}
                     key={id}
                   >
-                    <span>{icon}</span>
+                    <NavIcon name={id} />
                     {label}
                   </button>
                 ))}
@@ -1207,13 +704,13 @@ function App({
             <nav>
               {visiblePages
                 .filter(([, , , cat]) => cat === 'GOVERNANCE' || cat === 'INTELLIGENCE' || cat === 'PLATFORM')
-                .map(([id, label, icon]) => (
+                .map(([id, label]) => (
                   <button
                     className={current === id ? 'active' : ''}
                     onClick={() => navigate(id)}
                     key={id}
                   >
-                    <span>{icon}</span>
+                    <NavIcon name={id} />
                     {label}
                   </button>
                 ))}
@@ -1272,6 +769,7 @@ function App({
             <span className="local-tag">
               {remote ? 'SERVER MVP' : 'LOCAL MVP'}
             </span>
+            <NotificationsBell remote={remote} />
             <span className="avatar" title={`Role: ${effectiveRole}`}>
               {effectiveRole.slice(0, 2).toUpperCase()}
             </span>
@@ -1476,6 +974,7 @@ function App({
                     {bankLoading ? (
                       <p className="empty">Loading connected accounts…</p>
                     ) : bankAccounts.length ? (
+                      <>
                       <div className="account-list">
                         {bankAccounts.map((account) => (
                           <div className="account-row" key={account.id}>
@@ -1490,6 +989,22 @@ function App({
                           </div>
                         ))}
                       </div>
+                      {bankAccounts.length > 1 && (
+                        <label className="bank-account-picker">
+                          Review transactions for
+                          <select
+                            value={activeBankAccount?.id || ''}
+                            onChange={(event) => setSelectedBankAccountId(event.target.value)}
+                          >
+                            {bankAccounts.map((account) => (
+                              <option value={account.id} key={account.id}>
+                                {account.name} · {account.currency}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      </>
                     ) : (
                       <p className="empty">
                         No bank account is connected yet. Add a manual account to start reconciliation.
@@ -1534,7 +1049,7 @@ function App({
                     </form>
                   </>,
                 )}
-              {['owner', 'finance_admin', 'auditor'].includes(effectiveRole) && bankAccounts[0] &&
+              {['owner', 'finance_admin', 'auditor'].includes(effectiveRole) && activeBankAccount &&
                 section(
                   'Bank transactions',
                   <>
@@ -1571,7 +1086,7 @@ function App({
                                     onChange={async (event) => {
                                       if (!remote) return
                                       try {
-                                        await request(`/banks/accounts/${bankAccounts[0].id}/transactions/${transaction.id}`, {
+                                        await request(`/banks/accounts/${activeBankAccount.id}/transactions/${transaction.id}`, {
                                           method: 'PATCH',
                                           headers: { 'X-CSRF-Token': remote.csrf },
                                           body: JSON.stringify({ matchStatus: event.target.value }),
@@ -1598,6 +1113,66 @@ function App({
                     ) : (
                       <p className="empty">No bank transactions recorded yet.</p>
                     )}
+                    <details className="statement-import">
+                      <summary>Import a bank statement CSV</summary>
+                      <p>Use headers: <code>externalRef, occurredAt, amount, direction, reference</code>. A maximum of 250 lines is imported at once; existing external references are skipped.</p>
+                      <form
+                        className="inline-form"
+                        onSubmit={async (event) => {
+                          event.preventDefault()
+                          if (!remote) return
+                          const file = new FormData(event.currentTarget).get('statement')
+                          if (!(file instanceof File) || !file.size) {
+                            setError('Choose a CSV statement file to import.')
+                            return
+                          }
+                          try {
+                            const lines = (await file.text())
+                              .split(/\r?\n/)
+                              .map((line) => line.trim())
+                              .filter(Boolean)
+                            const headers = (lines.shift() || '')
+                              .split(',')
+                              .map((header) => header.trim().toLowerCase())
+                            const required = ['externalref', 'occurredat', 'amount', 'direction', 'reference']
+                            if (required.some((header) => !headers.includes(header))) {
+                              setError('CSV must contain: externalRef, occurredAt, amount, direction, reference.')
+                              return
+                            }
+                            const transactions = lines.map((line) => {
+                              const values = line.split(',').map((value) => value.trim())
+                              const value = (header: string) => values[headers.indexOf(header)] || ''
+                              return {
+                                externalRef: value('externalref'),
+                                occurredAt: new Date(value('occurredat')).toISOString(),
+                                amount: Number(value('amount')),
+                                direction: value('direction').toLowerCase(),
+                                reference: value('reference'),
+                              }
+                            })
+                            const result = await request<{ imported: number; skipped: number; suggested: number }>(
+                              `/banks/accounts/${activeBankAccount.id}/transactions/import`,
+                              {
+                                method: 'POST',
+                                headers: { 'X-CSRF-Token': remote.csrf },
+                                body: JSON.stringify({ transactions }),
+                              },
+                            )
+                            const refreshed = await request<{ transactions: BankTransaction[] }>(
+                              `/banks/accounts/${activeBankAccount.id}/transactions`,
+                            )
+                            setBankTransactions(refreshed.transactions)
+                            event.currentTarget.reset()
+                            setNotice(`${result.imported} statement lines imported; ${result.skipped} duplicates skipped; ${result.suggested} suggested matches.`)
+                          } catch (error) {
+                            setError(error instanceof Error ? error.message : 'Could not import the statement.')
+                          }
+                        }}
+                      >
+                        <input name="statement" type="file" accept=".csv,text/csv" required />
+                        <button disabled={busy || readOnly}>Import statement</button>
+                      </form>
+                    </details>
                     <form
                       className="inline-form"
                       onSubmit={async (event) => {
@@ -1605,7 +1180,7 @@ function App({
                         if (!remote) return
                         const values = Object.fromEntries(new FormData(event.currentTarget))
                         try {
-                          const created = await request<BankTransaction>(`/banks/accounts/${bankAccounts[0].id}/transactions`, {
+                          const created = await request<BankTransaction>(`/banks/accounts/${activeBankAccount.id}/transactions`, {
                             method: 'POST',
                             headers: { 'X-CSRF-Token': remote.csrf },
                             body: JSON.stringify({
@@ -1687,11 +1262,16 @@ function App({
               {stats([
                 ['Bank Accounts', bankAccounts.length, 'Registered institutional accounts'],
                 ['Connected Feeds', bankAccounts.filter((a) => a.status === 'active').length, 'Active API sync feeds'],
-                ['Total Statements', bankTransactions.length, 'Loaded statement lines'],
+                ['Statement credits', money(statementCredits), 'Selected account activity'],
                 [
-                  'Reconciled',
-                  `${bankTransactions.filter((t) => t.match_status === 'matched').length}/${bankTransactions.length || 0}`,
-                  'Matched to general ledger',
+                  'Statement debits',
+                  money(statementDebits),
+                  'Selected account activity',
+                ],
+                [
+                  'Needs review',
+                  bankTransactions.filter((t) => ['unmatched', 'suggested'].includes(t.match_status)).length,
+                  'Unmatched or suggested lines',
                 ],
               ])}
               {section(
@@ -1700,6 +1280,7 @@ function App({
                   {bankLoading ? (
                     <p className="empty">Loading connected accounts…</p>
                   ) : bankAccounts.length ? (
+                    <>
                     <div className="account-list">
                       {bankAccounts.map((account) => (
                         <div className="account-row" key={account.id}>
@@ -1716,6 +1297,22 @@ function App({
                         </div>
                       ))}
                     </div>
+                    {bankAccounts.length > 1 && (
+                      <label className="bank-account-picker">
+                        Review transactions for
+                        <select
+                          value={activeBankAccount?.id || ''}
+                          onChange={(event) => setSelectedBankAccountId(event.target.value)}
+                        >
+                          {bankAccounts.map((account) => (
+                            <option value={account.id} key={account.id}>
+                              {account.name} · {account.currency}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    </>
                   ) : (
                     <p className="empty">
                       No bank account is connected yet. Add a manual account or connect via Open Banking to start reconciliation.
@@ -1766,7 +1363,7 @@ function App({
                   </form>
                 </>,
               )}
-              {bankAccounts[0] &&
+              {activeBankAccount &&
                 section(
                   'Transaction Feed & Reconciliation Engine',
                   <>
@@ -1783,7 +1380,7 @@ function App({
                           if (!remote) return
                           try {
                             for (const tx of bankTransactions.filter((t) => t.match_status === 'suggested')) {
-                              await request(`/banks/accounts/${bankAccounts[0].id}/transactions/${tx.id}`, {
+                              await request(`/banks/accounts/${activeBankAccount.id}/transactions/${tx.id}`, {
                                 method: 'PATCH',
                                 headers: { 'X-CSRF-Token': remote.csrf },
                                 body: JSON.stringify({ matchStatus: 'matched' }),
@@ -1810,12 +1407,31 @@ function App({
                               <th>Amount</th>
                               <th>Flow</th>
                               <th>Matched source</th>
-                              <th>Reconciliation Status</th>
+                              <th>
+                                <label>
+                                  Status
+                                  <select
+                                    aria-label="Filter bank transactions by reconciliation status"
+                                    value={bankStatusFilter}
+                                    onChange={(event) =>
+                                      setBankStatusFilter(
+                                        event.target.value as 'all' | BankTransaction['match_status'],
+                                      )
+                                    }
+                                  >
+                                    <option value="all">All</option>
+                                    <option value="unmatched">Unmatched</option>
+                                    <option value="suggested">Suggested</option>
+                                    <option value="matched">Matched</option>
+                                    <option value="ignored">Ignored</option>
+                                  </select>
+                                </label>
+                              </th>
                               <th>Action</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {bankTransactions.map((transaction) => (
+                            {visibleBankTransactions.map((transaction) => (
                               <tr key={transaction.id}>
                                 <td>{new Date(transaction.occurred_at).toLocaleDateString()}</td>
                                 <td>{transaction.reference}</td>
@@ -1838,7 +1454,7 @@ function App({
                                     onChange={async (event) => {
                                       if (!remote) return
                                       try {
-                                        await request(`/banks/accounts/${bankAccounts[0].id}/transactions/${transaction.id}`, {
+                                        await request(`/banks/accounts/${activeBankAccount.id}/transactions/${transaction.id}`, {
                                           method: 'PATCH',
                                           headers: { 'X-CSRF-Token': remote.csrf },
                                           body: JSON.stringify({ matchStatus: event.target.value }),
@@ -1864,13 +1480,62 @@ function App({
                                   </select>
                                 </td>
                                 <td>
-                                  {transaction.match_status !== 'matched' ? (
+                                  {transaction.match_status === 'unmatched' && reconciliationSources(transaction).length ? (
+                                    <div className="manual-match">
+                                      <select
+                                        aria-label={`Manual source for ${transaction.reference}`}
+                                        value={manualMatches[transaction.id] || ''}
+                                        disabled={busy || readOnly}
+                                        onChange={(event) =>
+                                          setManualMatches((current) => ({
+                                            ...current,
+                                            [transaction.id]: event.target.value,
+                                          }))
+                                        }
+                                      >
+                                        <option value="">Select source…</option>
+                                        {reconciliationSources(transaction).map((source) => (
+                                          <option value={source.id} key={source.id}>{source.label}</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        disabled={busy || readOnly || !manualMatches[transaction.id]}
+                                        onClick={async () => {
+                                          if (!remote || !manualMatches[transaction.id]) return
+                                          try {
+                                            await request(`/banks/accounts/${activeBankAccount.id}/transactions/${transaction.id}`, {
+                                              method: 'PATCH',
+                                              headers: { 'X-CSRF-Token': remote.csrf },
+                                              body: JSON.stringify({
+                                                matchStatus: 'matched',
+                                                matchedEntityType: transaction.direction === 'credit' ? 'invoice' : 'expense',
+                                                matchedEntityId: manualMatches[transaction.id],
+                                              }),
+                                            })
+                                            setBankTransactions((items) =>
+                                              items.map((item) =>
+                                                item.id === transaction.id
+                                                  ? { ...item, match_status: 'matched' }
+                                                  : item,
+                                              ),
+                                            )
+                                            await refreshWorkspace()
+                                            setNotice(`Transaction ${transaction.reference} manually reconciled and audited.`)
+                                          } catch (error) {
+                                            setError(error instanceof Error ? error.message : 'Manual reconciliation failed.')
+                                          }
+                                        }}
+                                      >
+                                        Match source
+                                      </button>
+                                    </div>
+                                  ) : transaction.match_status !== 'matched' ? (
                                     <button
                                       disabled={busy || readOnly || transaction.match_status !== 'suggested'}
                                       onClick={async () => {
                                         if (!remote) return
                                         try {
-                                          await request(`/banks/accounts/${bankAccounts[0].id}/transactions/${transaction.id}`, {
+                                          await request(`/banks/accounts/${activeBankAccount.id}/transactions/${transaction.id}`, {
                                             method: 'PATCH',
                                             headers: { 'X-CSRF-Token': remote.csrf },
                                             body: JSON.stringify({ matchStatus: 'matched' }),
@@ -1906,7 +1571,7 @@ function App({
                         if (!remote) return
                         const values = Object.fromEntries(new FormData(event.currentTarget))
                         try {
-                          const created = await request<BankTransaction>(`/banks/accounts/${bankAccounts[0].id}/transactions`, {
+                          const created = await request<BankTransaction>(`/banks/accounts/${activeBankAccount.id}/transactions`, {
                             method: 'POST',
                             headers: { 'X-CSRF-Token': remote.csrf },
                             body: JSON.stringify({
@@ -1963,6 +1628,7 @@ function App({
                 add('products'),
               )}
             <StockPanel state={s} search={search} busy={busy} readOnly={readOnly} onCommit={commit} onPurchasing={()=>navigate('procurement')}/>
+            <FulfillmentPanel state={s} busy={busy} readOnly={readOnly} onCommit={commit}/>
             </>
           )}
           {current === 'crm' && (
@@ -2041,6 +1707,7 @@ function App({
               ),
               add('orders'),
             )}
+          {current === 'hr' && <><RecruitmentPanel remote={remote} /><WorkflowPanel kind="leave" remote={remote} state={s} /><WorkflowPanel kind="goals" remote={remote} state={s} /></>}
           {current === 'hr' && <Payslips state={s} />}
           {current === 'hr' && (
             <>
@@ -2537,131 +2204,29 @@ function App({
             </>
           )}
           {current === 'admin' && (
-            <AdminConsole currentRole={effectiveRole} />
+            <AdminConsole currentRole={effectiveRole} csrf={remote?.csrf} />
           )}
-          {current === 'warehouse' && <WarehouseTransfers remote={remote} />}
-          {operations[current] && <OperationsPanel key={current} module={current} remote={remote} />}
+          {current === 'warehouse' && <WarehousePanel remote={remote} onRefresh={refreshWorkspace} />}
+          {current === 'suppliers' && (
+            <SuppliersPanel
+              remote={remote}
+              onNavigateToProcurement={() => navigate('procurement')}
+            />
+          )}
+          {current === 'documents' && <DocumentsPanel remote={remote} />}
+          {current === 'support' && <SupportPanel remote={remote} />}
+          {current === 'support' && <WorkflowPanel kind="knowledge" remote={remote} state={s} />}
+          {current === 'frontoffice' && <WorkflowPanel kind="appointments" remote={remote} state={s} />}
+          {current === 'compliance' && <><WorkflowPanel kind="certifications" remote={remote} state={s} /><WorkflowPanel kind="findings" remote={remote} state={s} /></>}
+          {current === 'tax' && <TaxPanel remote={remote} />}
+          {current === 'supply' && <SupplyChainPanel remote={remote} />}
+          {current === 'automation' && <AutomationPanel remote={remote} />}
+          {current === 'workspace' && <VirtualWorkspace remote={remote} state={s} />}
+          {current === 'billing' && <BillingPanel />}
+          {current === 'completion' && <CompletionPanel remote={remote} />}
           {current === 'crm' && <Customers remote={remote} />}
           {current === 'crm' && <OperationsPanel module="campaigns" remote={remote} />}
-          {preview && !operations[current] && (
-            <>
-              <div className="notice preview-notice">
-                {remote
-                  ? current === 'documents'
-                    ? 'Document metadata is live. Binary object storage is not configured.'
-                    : 'Live tenant workspace · changes are validated and audited on the server.'
-                  : 'Browser demo · changes stay local until the workspace is connected.'}
-              </div>
-              {stats(preview.stats)}
-              <div className="two-col">
-                {section(
-                  preview.primaryTitle,
-                  <div className="preview-list">
-                    {remote && !moduleLoaded ? (
-                      <p className="empty">Loading module records…</p>
-                    ) : primaryRecords.map((record) => (
-                      <div className="preview-row" key={record.id}>
-                        <div>
-                          <b>{record.name}</b>
-                          <small>{record.detail}</small>
-                        </div>
-                        <select
-                          aria-label={`Status for ${record.name}`}
-                          value={record.status}
-                          disabled={busy || readOnly || record.id.startsWith('preview-')}
-                          onChange={(event) => void updatePreviewRecord(record, event.target.value)}
-                        >
-                          <option>{record.status}</option>
-                          <option>Active</option>
-                          <option>In progress</option>
-                          <option>Completed</option>
-                          <option>Needs review</option>
-                          <option>Draft</option>
-                        </select>
-                        <button
-                          aria-label={`Delete ${record.name}`}
-                          disabled={busy || readOnly || record.id.startsWith('preview-')}
-                          onClick={() => void deletePreviewRecord(record)}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>,
-                  <>
-                    {current === 'documents' && (
-                      <input
-                        ref={documentPicker}
-                        type="file"
-                        hidden
-                        onChange={(event) => {
-                          const file = event.target.files?.[0]
-                          if (file) void registerDocument(file)
-                          event.currentTarget.value = ''
-                        }}
-                      />
-                    )}
-                    <button
-                      disabled={busy || readOnly}
-                      onClick={() => current === 'documents' && remote
-                        ? documentPicker.current?.click()
-                        : void addPreviewRecord()}
-                    >
-                      {current === 'documents' ? 'Register document' : 'Add workflow'}
-                    </button>
-                    {current === 'support' && (
-                      <form className="inline-form" onSubmit={(event) => void createSupportTicket(event)}>
-                        <input name="subject" placeholder="Ticket subject" required />
-                        <input name="customer" placeholder="Customer" required />
-                        <select name="priority" defaultValue="medium" aria-label="Ticket priority">
-                          <option value="low">Low</option>
-                          <option value="medium">Medium</option>
-                          <option value="high">High</option>
-                          <option value="urgent">Urgent</option>
-                        </select>
-                        <input name="slaDueAt" type="datetime-local" aria-label="SLA due date" />
-                        <button className="primary" disabled={busy || readOnly}>Create ticket</button>
-                      </form>
-                    )}
-                    {current === 'tax' && (
-                      <form className="inline-form" onSubmit={(event) => void createTaxFiling(event)}>
-                        <input name="name" placeholder="Filing name" required />
-                        <input name="territory" placeholder="Territory" defaultValue="Nigeria" required />
-                        <input name="dueDate" type="date" required />
-                        <input name="amount" type="number" min="0" step="0.01" placeholder="Amount" required />
-                        <button className="primary" disabled={busy || readOnly}>Create filing</button>
-                      </form>
-                    )}
-                  </>,
-                )}
-                {section(
-                  preview.secondaryTitle,
-                  <div className="preview-list">
-                    {preview.secondaryItems.map(([name, status]) => (
-                      <div className="preview-row" key={name}>
-                        <div>
-                          <b>{name}</b>
-                          <small>Workspace configuration</small>
-                        </div>
-                        <span className={status.includes('pending') || status.includes('Needs') ? 'badge' : 'badge green'}>
-                          {status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>,
-                )}
-              </div>
-              {section(
-                'Next implementation slice',
-                <div className="workflow-strip">
-                  <span><b>1</b> Define tenant data model</span>
-                  <span><b>2</b> Add validated API actions</span>
-                  <span><b>3</b> Connect permissions and audit</span>
-                </div>,
-                <button onClick={() => navigate('admin')}>View platform status</button>,
-              )}
-            </>
-          )}
+          {operations[current] && <OperationsPanel key={current} module={current} remote={remote} />}
           <footer>
             BusinessOS <span>One workspace. A clearer business.</span>
             <small>{remote ? 'Server MVP · NGN' : 'Local MVP · NGN'}</small>
