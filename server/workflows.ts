@@ -1,4 +1,4 @@
-﻿import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { PoolClient } from 'pg'
 import type { Store } from './store.ts'
@@ -41,6 +41,18 @@ export async function handleWorkflow(args: {
     fail(403, 'Your role cannot change this workflow.')
   return store.tenant(s.tenant, async (c) => {
     await args.ensureCurrent(c, s)
+    // Resolve the employee record linked to this user account (self-service guard)
+    let selfEmployeeId: string | null = null
+    if (s.user.role === 'employee' && ['leave', 'goals'].includes(kind)) {
+      const current = await store.read(c, s.tenant)
+      // Match by name as a best-effort link; owners/HR set the employee record
+      const linked = current.state.employees.find(
+        (e) => e.name.toLowerCase() === s.user.name.toLowerCase(),
+      )
+      selfEmployeeId = linked?.id || null
+      if (method === 'GET' && !selfEmployeeId)
+        fail(403, 'Your employee record was not found. Ask your HR administrator to link your account.')
+    }
     if (['leave', 'goals'].includes(kind)) {
       const plan = (
         await c.query(
@@ -97,6 +109,13 @@ export async function handleWorkflow(args: {
         )
       )
         fail(404, 'Employee not found in this workspace.')
+      // Self-service: employees can only create records for themselves
+      if (s.user.role === 'employee' && ['leave', 'goals'].includes(kind)) {
+        if (!selfEmployeeId)
+          fail(403, 'Your employee record was not found. Ask your HR administrator to link your account.')
+        if (input.employeeId !== selfEmployeeId)
+          fail(403, 'Employees can only submit leave or goals for their own record.')
+      }
       if (kind === 'appointments') {
         input.room = String(input.room).trim().replace(/\s+/g, ' ')
         const overlap = await c.query(
@@ -147,6 +166,11 @@ export async function handleWorkflow(args: {
     if (!row) return fail(404, 'Record not found.')
     if (row.version !== input.version)
       fail(409, 'Record changed. Refresh before updating.')
+    // Self-service: employees can only update their own leave/goal records
+    if (s.user.role === 'employee' && ['leave', 'goals'].includes(kind)) {
+      if (!selfEmployeeId || row.data.employeeId !== selfEmployeeId)
+        fail(403, 'Employees can only update their own records.')
+    }
     if (
       kind === 'leave' &&
       input.status === 'approved' &&

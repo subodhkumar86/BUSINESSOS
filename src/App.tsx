@@ -1,4 +1,7 @@
 import { CompletionPanel } from './CompletionPanel'
+import { BudgetPanel } from './BudgetPanel'
+import { RFQPanel } from './RFQPanel'
+import { OnboardingWizard } from './OnboardingWizard'
 import { WorkflowPanel } from './WorkflowPanel'
 import { RecruitmentPanel } from './RecruitmentPanel'
 import { BillingPanel } from './BillingPanel'
@@ -29,6 +32,38 @@ import type {
 } from './types'
 import { request, saveAction, ApiError } from './api'
 import { Team } from './Team'
+
+function LeadScorePanel({ remote, state }: { remote: import('./types').Snapshot; state: import('./types').State }) {
+  const [scores, setScores] = useState<{ leadId: string; name: string; status: string; score: number }[]>([])
+  useEffect(() => {
+    request<{ scores: typeof scores }>('/crm/lead-scores').then((d) => setScores(d.scores)).catch(() => undefined)
+  }, [remote, state.leads.length])
+  if (!scores.length) return null
+  return (
+    <section className="card">
+      <div className="section-top"><h2>Lead Scores</h2><small style={{ color: 'var(--text-muted)' }}>Deterministic scoring by stage and deal size</small></div>
+      <div className="table-scroll">
+        <table>
+          <thead><tr><th>Opportunity</th><th>Stage</th><th>Score</th><th>Signal</th></tr></thead>
+          <tbody>
+            {scores.sort((a, b) => b.score - a.score).map((s) => (
+              <tr key={s.leadId}>
+                <td>{s.name}</td>
+                <td>{s.status}</td>
+                <td><b>{s.score}</b>/100</td>
+                <td>
+                  <div style={{ width: 80, height: 6, background: '#eee', borderRadius: 3 }}>
+                    <div style={{ width: s.score + '%', height: '100%', background: s.score >= 70 ? '#27ae60' : s.score >= 40 ? '#f39c12' : '#e74c3c', borderRadius: 3 }} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
 import { hydrateInventory } from './inventory'
 import { StockPanel } from './StockPanel'
 import { FulfillmentPanel } from './FulfillmentPanel'
@@ -96,6 +131,8 @@ const pages: [string, string, string, string][] = [
   ['compliance', 'Compliance & Risk', '✓', 'GOVERNANCE'],
   ['billing', 'Billing & Plans', '$', 'GOVERNANCE'],
   ['completion', 'Approvals & Branches', '✓', 'GOVERNANCE'],
+  ['budgets', 'Budget Management', '₿', 'GOVERNANCE'],
+  ['rfq', 'Quotations & RFQ', '📋', 'OPERATIONS'],
   ['ai', 'BI & AI Intelligence', '✧', 'INTELLIGENCE'],
   ['admin', 'Platform Admin', '🛡', 'PLATFORM'],
   ['settings', 'Settings & Security', '⚙', 'GOVERNANCE'],
@@ -533,6 +570,8 @@ function App({
       'Control the organisation.',
       'Workspace preferences, data exports, and activity history.',
     ],
+    budgets: ['Control spending before it happens.', 'Department budgets, variance tracking, and period analysis.'],
+    rfq: ['Get the best price before committing.', 'Request, compare, and accept supplier quotations.'],
     billing: ['Turn growth into a system.', 'Plans, usage, and entitlements for the whole organisation.'],
     documents: ['Keep the source of truth close.', 'Contracts, receipts, policies, and versions in one place.'],
     automation: ['Review workflow rules.', 'Saved rules and manual review history.'],
@@ -566,7 +605,7 @@ function App({
       suppliers: ['operations_manager'],
       warehouse: ['operations_manager'],
       projects: ['operations_manager', 'department_manager'],
-      hr: ['hr_admin'],
+      hr: ['hr_admin', 'employee'],
       assets: ['operations_manager'],
       facilities: ['operations_manager'],
       production: ['operations_manager'],
@@ -580,6 +619,8 @@ function App({
       compliance: ['finance_admin', 'operations_manager', 'hr_admin', 'super_admin'],
       billing: ['finance_admin'],
       completion: ['finance_admin', 'hr_admin', 'operations_manager'],
+      budgets: ['finance_admin'],
+      rfq: ['operations_manager'],
       ai: ['finance_admin', 'hr_admin', 'operations_manager', 'sales_crm_user'],
       settings: ['finance_admin', 'hr_admin', 'operations_manager', 'sales_crm_user', 'department_manager', 'employee'],
       admin: ['super_admin'],
@@ -810,6 +851,7 @@ function App({
               </button>
             </div>
           )}
+          <OnboardingWizard remote={remote} onNavigate={navigate} />
           {current === 'dashboard' && (
             <>
               <div className="welcome">
@@ -1668,6 +1710,7 @@ function App({
               )}
             </>
           )}
+          {current === 'procurement' && remote && <RFQPanel remote={remote} />}
           {current === 'procurement' &&
             section(
               'Purchase orders',
@@ -1707,7 +1750,7 @@ function App({
               ),
               add('orders'),
             )}
-          {current === 'hr' && <><RecruitmentPanel remote={remote} /><WorkflowPanel kind="leave" remote={remote} state={s} /><WorkflowPanel kind="goals" remote={remote} state={s} /></>}
+          {current === 'hr' && <><RecruitmentPanel remote={remote} /><WorkflowPanel kind="leave" remote={remote} state={s} /><WorkflowPanel kind="goals" remote={remote} state={s} /><WorkflowPanel kind="reviews" remote={remote} state={s} /></>}
           {current === 'hr' && <Payslips state={s} />}
           {current === 'hr' && (
             <>
@@ -2224,7 +2267,12 @@ function App({
           {current === 'workspace' && <VirtualWorkspace remote={remote} state={s} />}
           {current === 'billing' && <BillingPanel />}
           {current === 'completion' && <CompletionPanel remote={remote} />}
+          {current === 'budgets' && <BudgetPanel remote={remote} />}
+          {current === 'rfq' && <RFQPanel remote={remote} />}
           {current === 'crm' && <Customers remote={remote} />}
+          {current === 'crm' && remote && ['owner','sales_crm_user','finance_admin','auditor'].includes(effectiveRole) && (
+            <LeadScorePanel remote={remote} state={s} />
+          )}
           {current === 'crm' && <OperationsPanel module="campaigns" remote={remote} />}
           {operations[current] && <OperationsPanel key={current} module={current} remote={remote} />}
           <footer>

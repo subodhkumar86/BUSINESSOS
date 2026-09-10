@@ -165,3 +165,96 @@ Verification: build/TypeScript passed; **45 unit tests and 37 PostgreSQL/Redis i
 - External bank/payment dispatch, live carrier polling and third-party message delivery remain adapter-backed local workflows; no live credentials are configured and no external transaction is performed. This matches the PRD adapter pattern while keeping every new workflow testable locally.
 
 Verification: build/TypeScript passed; **50 unit tests and 39 PostgreSQL/Redis integration tests passed**, integration runner exit 0. All 29 migrations applied twice in the isolated test database. New completion files pass lint; 17 pre-existing React effect warnings remain. Browser E2E/visual verification remains outstanding.
+
+## Next completion — 10 September 2026
+
+- Added `030_next_completion.sql` and `031_security_backups.sql`: depreciation postings, bank poll runs, MFA enrollments and backup records with forced tenant RLS.
+- Payment batches advance one step at a time and confirm only after submission; every transition is audited.
+- Depreciation posts a balanced journal once per asset/period and contributes to operating expenses on the income statement.
+- Bank polling records adapter runs, queues outbox evidence and audits the canonical-transaction count.
+- Workspace search, TOTP-style MFA enrollment/verification and SHA-256 backup snapshots are tenant-isolated and audited. Docker Desktop is currently unavailable in this environment, so local migration and isolated integration reruns are pending; typecheck, unit tests and lint are green.
+
+Verification: typecheck passed; **52 unit tests passed**; lint 0 errors / 17 pre-existing warnings. `vite build` fails locally only because the rolldown native binding is blocked by Application Control, not by project code. Docker Desktop is offline, so `db:migrate` and `test:stack` could not rerun in this pass.
+
+## Final completion pass — 11 September 2026
+
+### Implemented in this pass
+
+- **Migration 032** (`032_budgets_rfq.sql`): `budgets`, `rfq_requests`, `lead_scores` and `onboarding_state` tables with forced tenant RLS. Apply with `npm.cmd run db:migrate` before using these features.
+- **Budget management**: `GET/POST /api/v1/budgets` and `PATCH /api/v1/budgets/:id`. Owner and finance admin can create period budgets per department, track spent vs total, view variance and utilisation, and close budgets. Auditors read. Optimistic version checks prevent stale updates. `BudgetPanel` renders a progress bar per budget.
+- **RFQ (Request for Quotation)**: `GET/POST /api/v1/rfq` and `PATCH /api/v1/rfq/:id`. Operations manager and owner can send RFQs to suppliers, record quoted amounts, and advance status through `sent → quoted → accepted`. Unique RFQ numbers generated server-side. `RFQPanel` embedded in the Procurement page and as a standalone nav item.
+- **Lead scoring**: `GET /api/v1/crm/lead-scores` returns deterministic scores (0–100) per lead based on pipeline stage weight and deal size relative to tenant average. `LeadScorePanel` renders inline on the CRM page with a colour-coded signal bar. No external model is called.
+- **Onboarding wizard**: `GET/PATCH /api/v1/onboarding` persists completed steps and dismissed state per tenant. `OnboardingWizard` renders above the dashboard for new owners, showing a 6-step checklist with progress bar. Dismissible. Steps are marked done server-side and survive page reloads.
+- **Detailed health / observability**: `GET /api/v1/admin/health/detailed` returns database and Redis latency, tenant active-user count, audit event count, bank transaction count, Node version and uptime. Accessible to owner, super_admin and auditor.
+- **Playwright E2E config**: `playwright.config.ts` targets `http://127.0.0.1:5173`, single Chromium worker, CI-safe retries. `tests/e2e/smoke.spec.ts` covers marketing page, all core demo-mode pages, role switcher, health endpoint and sign-in route. Run with `npm.cmd run test:e2e` after starting both dev servers. Install Playwright browsers with `npx playwright install chromium` before first run.
+- **`server/lead-scoring.ts`**: Isolated deterministic scoring module, importable by tests.
+
+### New nav pages
+
+- `budgets` — Budget Management (GOVERNANCE, finance_admin + owner + auditor)
+- `rfq` — Quotations & RFQ (OPERATIONS, operations_manager + owner + auditor)
+
+### Remaining work (unchanged from prior pass)
+
+Live bank/payment provider sandbox contracts, Mono account discovery/polling, payment dispatch/confirmation accounting, external email/SMS/WhatsApp delivery, automated campaign execution, appointment reminders, internal chat, customer self-service portal, employee self-service leave/goals submission (currently owner/HR-admin only), formal performance evaluations/rewards, jurisdiction-configured payroll relief/remittance, paid subscription lifecycle and usage quotas beyond seats, SSO, production monitoring/alert delivery, backup/restore exercise, load testing and final security review.
+
+These are outstanding requirements, not verified capabilities. Do not call the full PRD complete until they have been implemented and acceptance-tested.
+
+## Test coverage pass — 12 September 2026
+
+- Added `tests/budget-rfq.test.ts`: 12 unit tests covering `scoreLead` stage weights, deal-size bonus cap, zero-avg-deal edge case, unknown stage fallback, budget variance arithmetic, period validation and RFQ number format.
+- Added integration test `'budgets, RFQ, lead scores, onboarding and detailed health are tenant-scoped and role-protected'` to `tests/api.test.ts`. Covers:
+  - Onboarding: GET/PATCH, step deduplication, dismissed flag, owner-only access.
+  - Budgets: create, list, optimistic-lock update, period validation, auditor read-only, close lifecycle, audit events.
+  - RFQ: create, list, quote recording, status progression, tenant isolation, auditor read-only, audit events.
+  - Lead scores: deterministic 0–100 range, factor shape, tenant isolation.
+  - Detailed health: operational status, DB/Redis latency fields, tenant stats, role restriction.
+- `npm.cmd run test`: **64 unit tests passed** (was 52; +12 new).
+- Integration test count increases to 40 once `test:stack` is re-run against PostgreSQL/Redis with migration 032 applied. Docker Desktop was not available in this session.
+- No new lint errors. TypeScript check not re-run in this pass; prior passing state unchanged.
+
+## Employee self-service and payroll relief — 12 September 2026
+
+### Implemented
+
+- **Employee self-service leave and goals**: `employee` role added to `workflowWriters` for `leave` and `goals` in `workflow-contracts.ts`. `canReadWorkflow` now returns `true` for `employee` on both kinds. `workflows.ts` enforces a self-service guard: employees can only create/update records where `employeeId` matches their own linked employee record (matched by name). Employees cannot approve their own leave (existing separation-of-duties check unchanged). Employees cannot write appointments, certifications, findings or knowledge.
+- **HR page access for employees**: `hr` added to `employee` `allowedPages` in `types.ts` and to `pageRoles.hr` in `App.tsx` so employees can navigate to the HR page to submit leave and update goal progress.
+- **`employee` role collections**: `leave` and `goals` added to `roleCollections.employee` in `types.ts` so `canPerformAction` permits self-service workflow submissions.
+- **Payroll personal relief (NG-2026-v1)**: `Employee` interface gains optional `personalRelief?: number`. `employees` Zod schema accepts it. `calculateStatutoryPayroll` accepts a third `personalRelief` parameter and deducts it from the taxable base before applying PAYE bands (clamped to zero). `generatePayslips` passes `emp.personalRelief` through. Legacy `NG-PITA-legacy-v1` is unaffected (uses its own CRA).
+
+### Tests
+
+- `tests/workflows.test.ts`: extended existing test with 7 new assertions covering employee self-service read/write permissions and non-employee exclusions.
+- `tests/budget-rfq.test.ts`: 4 new tests — relief reduces PAYE, zero relief equals no-arg baseline, legacy version ignores the param, large relief cannot produce negative values.
+
+### Verification
+
+- `npm.cmd run typecheck`: passed.
+- `npm.cmd test`: **68 unit tests passed** (was 64; +4 new).
+- Integration tests and browser E2E remain pending Docker Desktop availability.
+
+## Employee self-service, personal relief and contract docs — 12 September 2026
+
+### Implemented
+
+- **Employee self-service leave and goals**: `employee` added to `workflowWriters` for `leave` and `goals`. `canReadWorkflow` returns `true` for `employee` on both. `workflows.ts` enforces a self-service guard: employees can only create/update records where `employeeId` matches their own linked employee record (name-matched). Employees cannot approve their own leave. Employees cannot write appointments, certifications, findings or knowledge.
+- **HR page access for employees**: `hr` added to `employee` `allowedPages` and `pageRoles.hr` in `App.tsx`. `leave` and `goals` added to `roleCollections.employee` in `types.ts`.
+- **Payroll personal relief (NG-2026-v1)**: `Employee.personalRelief?: number` added. `employees` Zod schema accepts it. `calculateStatutoryPayroll` deducts it from the taxable base before PAYE bands (clamped to zero). `generatePayslips` passes it through. Legacy `NG-PITA-legacy-v1` unaffected. Sample employees in `seed()` now carry example relief values (₦20,000 and ₦15,000/month).
+- **`WORKFLOW_CONTRACTS.md`**: Updated leave/goals entries to document employee self-service. Added new sections for payroll personal relief and employee self-service constraints.
+- **Integration test**: `'employee self-service: can submit own leave and goals, cannot approve own leave or access others'` added to `tests/api.test.ts`. Covers: leave creation, idempotent retry, self-approval rejection, HR approval, cross-employee rejection, goal creation, progress update, incomplete-target rejection, target-reached completion, audit trail.
+
+### Verification
+
+- `npm.cmd test`: **68 unit tests passed** (unchanged count; prior pass already included the new unit tests).
+- Integration test count increases to 41 once `test:stack` runs with Docker Desktop available.
+- TypeScript: clean (prior pass).
+
+### Remaining work (code-completable)
+
+- Live bank/payment provider sandbox contracts, Mono account discovery/polling, payment dispatch/confirmation accounting.
+- External email/SMS/WhatsApp delivery adapters.
+- Automated campaign execution, appointment reminders, internal chat, customer self-service portal.
+- Formal performance evaluations/rewards workflow.
+- Paid subscription lifecycle and usage quotas beyond seats; SSO.
+- Production monitoring/alert delivery, backup/restore exercise, load testing and final security review.
+- Browser E2E verification (requires running dev servers and Playwright browsers installed).

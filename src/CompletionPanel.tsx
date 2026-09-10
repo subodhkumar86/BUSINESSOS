@@ -63,6 +63,10 @@ export function CompletionPanel({ remote }: { remote: Snapshot | null }) {
         <label>Message<input value={form.notifyBody} onChange={(e) => setForm({ ...form, notifyBody: e.target.value })} /></label>
         <button className="primary" onClick={() => void post('/notifications/outbox', { channel: 'email', recipient: form.notifyRecipient || 'ops@example.test', body: form.notifyBody || 'Operational update' })}>Queue message</button>
       </div>
+      <h3>Workspace search</h3>
+      <SearchBox csrf={csrf} />
+      <h3>Security and backups</h3>
+      <SecurityBox csrf={csrf} />
       <h3>Pending approvals ({(data.requests || []).length})</h3>
       <div className="table-scroll"><table><thead><tr><th>Entity</th><th>Scope</th><th>Status</th><th>Chain</th></tr></thead><tbody>
         {(data.requests as { id: string; entity_id: string; entity_type: string; status: string; chain_name: string }[] || []).slice(0, 20).map((row) => (
@@ -71,5 +75,27 @@ export function CompletionPanel({ remote }: { remote: Snapshot | null }) {
       </tbody></table></div>
       <p><button onClick={() => void load()}>Refresh completion data</button></p>
     </section>
+  )
+}
+function SearchBox({ csrf: _csrf }: { csrf: string }) {
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<{ kind: string; id: string; name: string }[]>([])
+  return (
+    <div className="operations-fields">
+      <label>Search workspace<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Type at least 2 characters" /></label>
+      <button onClick={() => void request<{ results: { kind: string; id: string; name: string }[] }>('/search?q=' + encodeURIComponent(q)).then((r) => setResults(r.results)).catch(() => setResults([]))}>Search</button>
+      <span role="status">{results.length ? results.map((r) => `${r.kind}: ${r.name}`).join(' · ') : 'No results yet.'}</span>
+    </div>
+  )
+}
+function SecurityBox({ csrf }: { csrf: string }) {
+  const [status, setStatus] = useState('MFA and backups are managed per signed-in user.')
+  const headers = { 'X-CSRF-Token': csrf }
+  return (
+    <div className="operations-fields">
+      <button onClick={() => void request<{ secret: string; previewCode: string }>('/auth/mfa', { method: 'POST', headers }).then((r) => setStatus('MFA enrolled. Preview code: ' + r.previewCode)).catch((e) => setStatus(e instanceof Error ? e.message : 'MFA failed.'))}>Enroll MFA</button>
+      <button onClick={() => void request('/admin/backups', { method: 'POST', headers, body: JSON.stringify({ label: 'manual-' + new Date().toISOString().slice(0, 10) }) }).then(() => setStatus('Changes saved successfully.')).catch((e) => setStatus(e instanceof Error ? e.message : 'Backup failed.'))}>Create backup</button>
+      <span role="status">{status}</span>
+    </div>
   )
 }

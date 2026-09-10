@@ -205,3 +205,15 @@ Run `npm.cmd run db:migrate` first; migrations `027-029` add branches, approval 
 - Recruitment interviews: `GET/POST /api/v1/hr/candidates/:id/interviews` with scheduling, scoring schema and audit events.
 - Notification adapters: `POST/GET /api/v1/notifications/outbox` queues email/SMS/WhatsApp/push through a provider interface (`NOTIFY_PROVIDER`, default `local-log`), and `POST /.../:id/deliver` runs the audited local delivery worker. External credentials are not required and nothing is sent outside the database.
 - New **Approvals & Branches** workspace screen manages branches, chains, forecast runs, the outbox and pending approvals in one place.
+
+## Next completion — 10 September 2026
+
+Run `npm.cmd run db:migrate` first; migrations `030-031` add asset depreciation postings, bank poll runs, MFA enrollments and backup records.
+
+- Payment batches now complete `pending → submitted → confirmed` (`PATCH /payroll/runs/:id/payment-batches`), with failure handling, role checks and audits.
+- Depreciation is posted, not just calculated: `POST /assets/:id/depreciation { period }` writes a balanced `Depreciation expense / Accumulated depreciation` journal, blocks duplicate period postings and feeds operating expenses.
+- Bank adapters expose audited polling: `POST/GET /banks/accounts/:id/poll` records canonical-transaction counts and queues a `bank_poll` outbox event.
+- Workspace search: `GET /search?q=` returns tenant-scoped products, invoices, leads, employees, projects and tasks.
+- MFA option: `POST /auth/mfa`, `POST /auth/mfa/verify` and `GET /auth/mfa` enroll and verify TOTP-style codes with audit events.
+- Backups: `POST/GET /admin/backups` snapshots the tenant workspace with SHA-256 and audit evidence.
+- Completion screen adds search, MFA enrollment and manual backup controls.

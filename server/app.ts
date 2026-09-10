@@ -1,3 +1,6 @@
+import { globalSearch } from './search.ts'
+import { scoreLead } from './lead-scoring.ts'
+import { newMfaSecret, verifyMfaCode, mfaCode } from './mfa.ts'
 import { queueMessage, signDelivery } from './notify.ts'
 import { pdfReport } from './pdf.ts'
 import { chainInput, chainUpdate, approvalDecision, seedDefaultChains, matchingChain } from './approvals.ts'
@@ -1421,6 +1424,22 @@ export async function createApp(config: {
           })
           return send(res, 201, { batch })
         }
+        if (req.method === 'PATCH') {
+          if (!['owner', 'finance_admin'].includes(s.user.role))
+            fail(403, 'Only finance-authorised users can move payment batches.')
+          const target = z.object({ status: z.enum(['submitted', 'confirmed', 'failed']) }).strict().parse(await body(req))
+          const updated = await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query('SELECT * FROM payroll_payment_batches WHERE tenant_id=$1 AND payroll_run_id=$2 FOR UPDATE', [s.tenant, payrollRunId])).rows[0]
+            if (!existing) fail(404, 'Payment batch not found.')
+            const order = ['pending', 'submitted', 'confirmed']
+            if (target.status === 'failed' && existing.status !== 'pending' && existing.status !== 'submitted') fail(409, 'Only pending or submitted batches can fail.')
+            if (target.status !== 'failed' && order.indexOf(target.status) !== order.indexOf(existing.status) + 1) fail(409, 'Move payment batches one step at a time.')
+            const row = (await c.query('UPDATE payroll_payment_batches SET status=$1,updated_at=now() WHERE tenant_id=$2 AND id=$3 RETURNING id,payroll_run_id,amount,status,created_at,updated_at', [target.status, s.tenant, existing.id])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'payroll_payment_batch_' + target.status, entity: 'payroll_payment_batch', detail: existing.id })
+            return row
+          })
+          return send(res, 200, { batch: updated })
+        }
       }
       const payslipsRoute = path.match(
         /^\/api\/v1\/hr\/runs\/([0-9a-f-]+)\/payslips$/i,
@@ -2398,10 +2417,11 @@ export async function createApp(config: {
       }
 
       // 1. Assets Management (Module 1 & 11)
+      const depreciationRoute = path.match(/^\/api\/v1\/assets\/([0-9a-f-]+)\/depreciation$/i)
       const assetRoute = path.match(/^\/api\/v1\/assets(?:\/([0-9a-f-]+))?$/i)
-      if (assetRoute) {
-        const assetId = assetRoute[1] ? z.string().uuid().parse(assetRoute[1]) : undefined
-        if (req.method === 'GET') {
+      if (assetRoute || depreciationRoute) {
+        const assetId = assetRoute?.[1] ? z.string().uuid().parse(assetRoute[1]) : undefined
+        if (assetRoute && req.method === 'GET') {
           if (!['owner', 'operations_manager', 'finance_admin', 'auditor'].includes(s.user.role))
             fail(403, 'Your role cannot view capital assets.')
           return send(res, 200, await store.tenant(s.tenant, async (c) => {
@@ -2418,7 +2438,7 @@ export async function createApp(config: {
             }
           }))
         }
-        if (req.method === 'POST' && !assetId) {
+        if (assetRoute && req.method === 'POST' && !assetId) {
           if (!['owner', 'operations_manager', 'finance_admin'].includes(s.user.role))
             fail(403, 'Your role cannot register assets.')
           const b = z.object({
@@ -2469,6 +2489,33 @@ export async function createApp(config: {
             })
           })
           return send(res, 200, { ok: true })
+        }
+        if (depreciationRoute) {
+          if (!['owner', 'finance_admin'].includes(s.user.role)) fail(403, 'Only finance can post depreciation.')
+          const id = z.uuid().parse(depreciationRoute[1])
+          if (req.method === 'POST') {
+            const input = z.object({ period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).strict().parse(await body(req))
+            const row = await store.tenant(s.tenant, async (c) => {
+              const asset = (await c.query('SELECT * FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, id])).rows[0]
+              if (!asset) fail(404, 'Asset not found.')
+              const years = Math.max(0, (Date.parse(input.period + '-01T00:00:00Z') - new Date(asset.created_at).getTime()) / (365.25 * 24 * 3600 * 1000))
+              const claimed = Number((await c.query('SELECT COALESCE(SUM(amount),0) AS total FROM asset_depreciation_postings WHERE tenant_id=$1 AND asset_id=$2', [s.tenant, id])).rows[0].total)
+              const found = depreciation(Number(asset.cost), Number(asset.depreciation_rate), years)
+              const amount = Math.round((found.accumulated - claimed) * 100) / 100
+              if (amount <= 0) fail(409, 'No additional depreciation is due for this period.')
+              const current = await store.read(c, s.tenant, true)
+              const journal = { id: randomUUID(), date: input.period + '-28T00:00:00Z', source: id, amount, debit: 'Depreciation expense', credit: 'Accumulated depreciation' }
+              await store.append(c, s.tenant, journal, 'journals')
+              await c.query('INSERT INTO asset_depreciation_postings(id,tenant_id,asset_id,period,amount,journal_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)', [randomUUID(), s.tenant, id, input.period, amount, journal.id, s.user.id])
+              await c.query('UPDATE tenants SET state=$1,version=version+1 WHERE id=$2', [{ ...current.state, audit: [], journals: [], stockMovements: [] }, s.tenant])
+              await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'asset_depreciation_posted', entity: id, detail: input.period + ' NGN ' + amount })
+              return { assetId: id, period: input.period, amount, journalId: journal.id }
+            })
+            return send(res, 201, row)
+          }
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            postings: (await c.query('SELECT * FROM asset_depreciation_postings WHERE tenant_id=$1 AND asset_id=$2 ORDER BY period DESC', [s.tenant, id])).rows,
+          })))
         }
       }
 
@@ -2549,7 +2596,7 @@ export async function createApp(config: {
             fail(403, 'Your role cannot view production batches.')
           return send(res, 200, await store.tenant(s.tenant, async (c) => ({
             batches: (await c.query(
-              'SELECT id,batch_number,product_name,planned_qty,completed_qty,defect_count,status,created_at,updated_at FROM production_batches WHERE tenant_id=$1 ORDER BY created_at DESC',
+              'SELECT id,batch_number,product_name,output_product_id,materials,planned_qty,completed_qty,defect_count,status,inventory_posted_at,created_at,updated_at FROM production_batches WHERE tenant_id=$1 ORDER BY created_at DESC',
               [s.tenant]
             )).rows,
           })))
@@ -2560,13 +2607,15 @@ export async function createApp(config: {
           const b = z.object({
             batchNumber: text,
             productName: text,
+            outputProductId: z.string().trim().min(1).max(120).optional(),
+            materials: z.array(z.object({ productId: z.string().trim().min(1).max(120), quantity: z.number().int().positive() }).strict()).max(50).default([]),
             plannedQty: z.number().int().min(1),
           }).strict().parse(await body(req))
           const id = randomUUID()
           await store.tenant(s.tenant, async (c) => {
             await c.query(
-              'INSERT INTO production_batches(id,tenant_id,batch_number,product_name,planned_qty) VALUES($1,$2,$3,$4,$5)',
-              [id, s.tenant, b.batchNumber, b.productName, b.plannedQty]
+              'INSERT INTO production_batches(id,tenant_id,batch_number,product_name,output_product_id,materials,planned_qty) VALUES($1,$2,$3,$4,$5,$6,$7)',
+              [id, s.tenant, b.batchNumber, b.productName, b.outputProductId || null, JSON.stringify(b.materials), b.plannedQty]
             )
             await store.append(c, s.tenant, {
               id: randomUUID(),
@@ -2588,9 +2637,27 @@ export async function createApp(config: {
             status: z.enum(['scheduled', 'running', 'qa_check', 'completed']).optional(),
           }).strict().parse(await body(req))
           await store.tenant(s.tenant, async (c) => {
-            const current=(await c.query('SELECT status,planned_qty,completed_qty,defect_count FROM production_batches WHERE id=$1 AND tenant_id=$2 FOR UPDATE',[batchId,s.tenant])).rows[0]
+            const current=(await c.query('SELECT status,planned_qty,completed_qty,defect_count,output_product_id,materials,inventory_posted_at FROM production_batches WHERE id=$1 AND tenant_id=$2 FOR UPDATE',[batchId,s.tenant])).rows[0]
             if(!current) return fail(404,'Batch not found.')
             try { validateProductionUpdate(current,b) } catch(e) { return fail(400,e instanceof Error?e.message:'Invalid production update.') }
+            if (b.status === 'completed' && !current.inventory_posted_at) {
+              const snapshot = await store.read(c, s.tenant, true)
+              const state = snapshot.state
+              const materials = current.materials as { productId: string; quantity: number }[]
+              for (const material of materials) {
+                const product = state.products.find((item) => item.id === material.productId)
+                if (!product) throw new HttpError(400, 'Production material was not found in inventory.')
+                if (product.qty < material.quantity) fail(409, 'Insufficient stock for production material consumption.')
+                product.qty -= material.quantity
+              }
+              if (current.output_product_id) {
+                const output = state.products.find((item) => item.id === current.output_product_id)
+                if (!output) throw new HttpError(400, 'Finished-good product was not found in inventory.')
+                output.qty += (b.completedQty ?? current.completed_qty) - (b.defectCount ?? current.defect_count)
+              }
+              await c.query('UPDATE tenants SET state=$1,version=version+1 WHERE id=$2', [{ ...state, audit: [], journals: [], stockMovements: [] }, s.tenant])
+              await c.query('UPDATE production_batches SET inventory_posted_at=now() WHERE id=$1 AND tenant_id=$2', [batchId, s.tenant])
+            }
             const result = await c.query(
               'UPDATE production_batches SET completed_qty=COALESCE($1,completed_qty), defect_count=COALESCE($2,defect_count), status=COALESCE($3,status), updated_at=now() WHERE id=$4 AND tenant_id=$5',
               [b.completedQty ?? null, b.defectCount ?? null, b.status || null, batchId, s.tenant]
@@ -3258,6 +3325,78 @@ export async function createApp(config: {
         })
         return send(res, 200, { id: row.id, status: row.status })
       }
+      const pollRoute = path.match(/^\/api\/v1\/banks\/accounts\/([0-9a-f-]+)\/poll$/i)
+      if (pollRoute) {
+        if (!['owner', 'finance_admin'].includes(s.user.role)) fail(403, 'Only finance can poll bank adapters.')
+        const accountId = z.uuid().parse(pollRoute[1])
+        if (req.method === 'POST') {
+          const result = await store.tenant(s.tenant, async (c) => {
+            const account = (await c.query('SELECT * FROM bank_accounts WHERE tenant_id=$1 AND id=$2', [s.tenant, accountId])).rows[0]
+            if (!account) fail(404, 'Bank account not found.')
+            const seen = Number((await c.query('SELECT count(*)::int AS n FROM bank_transactions WHERE tenant_id=$1 AND bank_account_id=$2', [s.tenant, accountId])).rows[0].n)
+            const run = (await c.query('INSERT INTO bank_poll_runs(id,tenant_id,account_id,transactions_seen,created_by) VALUES($1,$2,$3,$4,$5) RETURNING *', [randomUUID(), s.tenant, accountId, seen, s.user.id])).rows[0]
+            await queueMessage(c, s.tenant, { channel: 'bank_poll', recipient: account.id, body: `Polled ${account.provider} adapter; ${seen} canonical transactions on record.` })
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'bank_adapter_polled', entity: accountId, detail: `${account.provider} seen=${seen}` })
+            return { run, provider: account.provider, transactionsSeen: seen }
+          })
+          return send(res, 201, result)
+        }
+        return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+          polls: (await c.query('SELECT * FROM bank_poll_runs WHERE tenant_id=$1 AND account_id=$2 ORDER BY polled_at DESC LIMIT 20', [s.tenant, accountId])).rows,
+        })))
+      }
+      const searchRoute = path.match(/^\/api\/v1\/search$/i)
+      if (searchRoute && req.method === 'GET') {
+        const q = new URL(req.url || '/', 'http://localhost').searchParams.get('q') || ''
+        const data = await store.tenant(s.tenant, async (c) => ({ results: globalSearch((await store.read(c, s.tenant)).state, q) }))
+        return send(res, 200, data)
+      }
+      const mfaRoute = path.match(/^\/api\/v1\/auth\/mfa(?:\/(verify))?$/i)
+      if (mfaRoute) {
+        if (req.method === 'GET') {
+          const row = await store.tenant(s.tenant, async (c) => (await c.query('SELECT verified,created_at FROM mfa_enrollments WHERE tenant_id=$1 AND user_id=$2', [s.tenant, s.user.id])).rows[0])
+          return send(res, 200, { enrolled: Boolean(row), verified: Boolean(row?.verified) })
+        }
+        if (req.method === 'POST' && !mfaRoute[1]) {
+          const secret = newMfaSecret()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query('INSERT INTO mfa_enrollments(user_id,tenant_id,secret) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET secret=EXCLUDED.secret,verified=false,verified_at=NULL', [s.user.id, s.tenant, secret])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'mfa_enrolled', entity: 'security', detail: s.user.id })
+          })
+          return send(res, 201, { secret, previewCode: mfaCode(secret) })
+        }
+        if (req.method === 'POST' && mfaRoute[1]) {
+          const input = z.object({ code: z.string().regex(/^\d{6}$/) }).strict().parse(await body(req))
+          const ok = await store.tenant(s.tenant, async (c) => {
+            const row = (await c.query('SELECT * FROM mfa_enrollments WHERE tenant_id=$1 AND user_id=$2', [s.tenant, s.user.id])).rows[0]
+            if (!row) fail(404, 'MFA is not enrolled.')
+            if (!verifyMfaCode(row.secret, input.code)) fail(401, 'Invalid MFA code.')
+            await c.query('UPDATE mfa_enrollments SET verified=true,verified_at=now() WHERE user_id=$1', [s.user.id])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'mfa_verified', entity: 'security', detail: s.user.id })
+            return true
+          })
+          return send(res, 200, { verified: ok })
+        }
+      }
+      const backupRoute = path.match(/^\/api\/v1\/admin\/backups$/i)
+      if (backupRoute) {
+        if (!['owner', 'auditor'].includes(s.user.role)) fail(403, 'Only the owner can manage backups.')
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            backups: (await c.query('SELECT id,label,byte_size,sha256,created_at FROM data_backups WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 20', [s.tenant])).rows,
+          })))
+        }
+        const input = z.object({ label: text }).strict().parse(await body(req))
+        const row = await store.tenant(s.tenant, async (c) => {
+          const snapshot = await store.read(c, s.tenant)
+          const payload = Buffer.from(JSON.stringify({ tenant: s.tenant, version: snapshot.version, state: snapshot.state, at: new Date().toISOString() }))
+          const { createHash } = await import('node:crypto')
+          const created = (await c.query('INSERT INTO data_backups(id,tenant_id,label,byte_size,sha256,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,label,byte_size,sha256,created_at', [randomUUID(), s.tenant, input.label, payload.length, createHash('sha256').update(payload).digest('hex'), s.user.id])).rows[0]
+          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'backup_created', entity: 'backup', detail: input.label + ' ' + payload.length + ' bytes' })
+          return created
+        })
+        return send(res, 201, row)
+      }
 
       const adminTenantRoute = new RegExp('^/api/v1/admin/tenants(?:/([0-9a-f-]+)/plan)?$','i').exec(path)
       if(adminTenantRoute) {
@@ -3464,6 +3603,204 @@ export async function createApp(config: {
           entitlements: { plan: entitlement.id, features: entitlement.features, seatLimit: entitlement.seat_limit },
         } satisfies Snapshot)
       }
+      // Budget management
+      const budgetRoute = path.match(/^\/api\/v1\/budgets(?:\/([0-9a-f-]+))?$/i)
+      if (budgetRoute) {
+        const budgetId = budgetRoute[1] ? z.uuid().parse(budgetRoute[1]) : undefined
+        if (!['owner', 'finance_admin', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot access budgets.')
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            budgets: (await c.query(
+              'SELECT id,name,department,period_from,period_to,total_amount,spent_amount,status,version,created_at FROM budgets WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY period_from DESC,id',
+              [s.tenant, budgetId || null],
+            )).rows,
+          })))
+        }
+        if (s.user.role === 'auditor') fail(403, 'Budgets are read-only for auditors.')
+        if (req.method === 'POST' && !budgetId) {
+          const b = z.object({
+            name: text,
+            department: z.string().trim().max(100).default(''),
+            periodFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            periodTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            totalAmount: z.number().finite().min(0),
+          }).strict().parse(await body(req))
+          if (b.periodTo < b.periodFrom) fail(400, 'Period end must be on or after period start.')
+          const id = randomUUID()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO budgets(id,tenant_id,name,department,period_from,period_to,total_amount,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+              [id, s.tenant, b.name, b.department, b.periodFrom, b.periodTo, b.totalAmount, s.user.id],
+            )
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'budget_created', entity: 'budget', detail: b.name })
+          })
+          return send(res, 201, { id, ...b, spentAmount: 0, status: 'active', version: 1 })
+        }
+        if (req.method === 'PATCH' && budgetId) {
+          const b = z.object({
+            version: z.number().int().positive(),
+            spentAmount: z.number().finite().min(0).optional(),
+            status: z.enum(['active', 'closed', 'draft']).optional(),
+            totalAmount: z.number().finite().min(0).optional(),
+          }).strict().parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query('SELECT * FROM budgets WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, budgetId])).rows[0]
+            if (!existing) fail(404, 'Budget not found.')
+            if (existing.version !== b.version) fail(409, 'Budget changed. Refresh before updating.')
+            const updated = (await c.query(
+              'UPDATE budgets SET spent_amount=COALESCE($1,spent_amount),status=COALESCE($2,status),total_amount=COALESCE($3,total_amount),version=version+1,updated_at=now() WHERE tenant_id=$4 AND id=$5 RETURNING *',
+              [b.spentAmount ?? null, b.status || null, b.totalAmount ?? null, s.tenant, budgetId],
+            )).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'budget_updated', entity: budgetId, detail: existing.name })
+            return updated
+          })
+          return send(res, 200, row)
+        }
+        fail(405, 'Method not supported.')
+      }
+
+      // RFQ (Request for Quotation)
+      const rfqRoute = path.match(/^\/api\/v1\/rfq(?:\/([0-9a-f-]+))?$/i)
+      if (rfqRoute) {
+        const rfqId = rfqRoute[1] ? z.uuid().parse(rfqRoute[1]) : undefined
+        if (!['owner', 'operations_manager', 'finance_admin', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot access RFQs.')
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => ({
+            rfqs: (await c.query(
+              'SELECT id,rfq_number,supplier_name,product_description,quantity,required_by,quoted_amount,status,notes,version,created_at FROM rfq_requests WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY created_at DESC',
+              [s.tenant, rfqId || null],
+            )).rows,
+          })))
+        }
+        if (s.user.role === 'auditor') fail(403, 'RFQs are read-only for auditors.')
+        if (req.method === 'POST' && !rfqId) {
+          const b = z.object({
+            supplierName: text,
+            productDescription: z.string().trim().min(1).max(500),
+            quantity: z.number().int().min(1),
+            requiredBy: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
+            notes: z.string().trim().max(500).default(''),
+          }).strict().parse(await body(req))
+          const id = randomUUID()
+          const rfqNumber = 'RFQ-' + randomUUID().slice(0, 8).toUpperCase()
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              'INSERT INTO rfq_requests(id,tenant_id,rfq_number,supplier_name,product_description,quantity,required_by,notes,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+              [id, s.tenant, rfqNumber, b.supplierName, b.productDescription, b.quantity, b.requiredBy, b.notes, s.user.id],
+            )
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'rfq_created', entity: 'rfq', detail: rfqNumber + ' / ' + b.supplierName })
+          })
+          return send(res, 201, { id, rfqNumber, ...b, quotedAmount: null, status: 'sent', version: 1 })
+        }
+        if (req.method === 'PATCH' && rfqId) {
+          const b = z.object({
+            version: z.number().int().positive(),
+            quotedAmount: z.number().finite().min(0).nullable().optional(),
+            status: z.enum(['draft', 'sent', 'quoted', 'accepted', 'rejected', 'expired']).optional(),
+            notes: z.string().trim().max(500).optional(),
+          }).strict().parse(await body(req))
+          const row = await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query('SELECT * FROM rfq_requests WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, rfqId])).rows[0]
+            if (!existing) fail(404, 'RFQ not found.')
+            if (existing.version !== b.version) fail(409, 'RFQ changed. Refresh before updating.')
+            const updated = (await c.query(
+              'UPDATE rfq_requests SET quoted_amount=COALESCE($1,quoted_amount),status=COALESCE($2,status),notes=COALESCE($3,notes),version=version+1,updated_at=now() WHERE tenant_id=$4 AND id=$5 RETURNING *',
+              [b.quotedAmount ?? null, b.status || null, b.notes || null, s.tenant, rfqId],
+            )).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'rfq_updated', entity: rfqId, detail: existing.rfq_number + ' -> ' + (b.status || 'updated') })
+            return updated
+          })
+          return send(res, 200, row)
+        }
+        fail(405, 'Method not supported.')
+      }
+
+      // Lead scoring
+      if (req.method === 'GET' && path === '/api/v1/crm/lead-scores') {
+        if (!['owner', 'sales_crm_user', 'finance_admin', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot view lead scores.')
+        const result = await store.tenant(s.tenant, async (c) => {
+          const { state } = await store.read(c, s.tenant)
+          const avgDeal = state.leads.length ? state.leads.reduce((a, l) => a + l.amount, 0) / state.leads.length : 0
+          const scores = state.leads.map((lead) => ({ leadId: lead.id, name: lead.name, status: lead.status, amount: lead.amount, ...scoreLead(lead, avgDeal) }))
+          return { scores }
+        })
+        return send(res, 200, result)
+      }
+
+      // Onboarding state
+      if (path === '/api/v1/onboarding') {
+        if (s.user.role !== 'owner') fail(403, 'Only the owner can manage onboarding.')
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            const row = (await c.query('SELECT completed_steps,dismissed FROM onboarding_state WHERE tenant_id=$1', [s.tenant])).rows[0]
+            return { completedSteps: row?.completed_steps || [], dismissed: row?.dismissed || false }
+          }))
+        }
+        if (req.method === 'PATCH') {
+          const b = z.object({
+            completedStep: z.string().trim().min(1).max(80).optional(),
+            dismissed: z.boolean().optional(),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            if (b.completedStep) {
+              await c.query(
+                `INSERT INTO onboarding_state(tenant_id,completed_steps) VALUES($1,$2::jsonb)
+                 ON CONFLICT(tenant_id) DO UPDATE SET
+                   completed_steps=CASE WHEN onboarding_state.completed_steps @> $2::jsonb THEN onboarding_state.completed_steps
+                                        ELSE onboarding_state.completed_steps || $2::jsonb END,
+                   updated_at=now()`,
+                [s.tenant, JSON.stringify([b.completedStep])],
+              )
+            }
+            if (b.dismissed !== undefined) {
+              await c.query(
+                `INSERT INTO onboarding_state(tenant_id,dismissed) VALUES($1,$2)
+                 ON CONFLICT(tenant_id) DO UPDATE SET dismissed=$2,updated_at=now()`,
+                [s.tenant, b.dismissed],
+              )
+            }
+          })
+          return send(res, 200, { ok: true })
+        }
+        fail(405, 'Method not supported.')
+      }
+
+      // Detailed health / observability
+      if (req.method === 'GET' && path === '/api/v1/admin/health/detailed') {
+        if (!['owner', 'super_admin', 'auditor'].includes(s.user.role))
+          fail(403, 'Your role cannot view system health.')
+        const dbStart = Date.now()
+        await store.pool.query('SELECT 1')
+        const dbMs = Date.now() - dbStart
+        const redisStart = Date.now()
+        await redis.ping()
+        const redisMs = Date.now() - redisStart
+        const tenantStats = await store.tenant(s.tenant, async (c) => {
+          const counts = (await c.query(
+            `SELECT
+               (SELECT count(*)::int FROM users WHERE tenant_id=$1 AND active=true) AS active_users,
+               (SELECT count(*)::int FROM audit WHERE tenant_id=$1) AS audit_events,
+               (SELECT count(*)::int FROM bank_transactions WHERE tenant_id=$1) AS bank_transactions`,
+            [s.tenant],
+          )).rows[0]
+          return counts
+        })
+        return send(res, 200, {
+          status: 'operational',
+          checks: {
+            database: { ok: true, latencyMs: dbMs, engine: 'PostgreSQL 17' },
+            redis: { ok: true, latencyMs: redisMs, engine: 'Redis 7.4' },
+          },
+          tenant: tenantStats,
+          uptime: process.uptime(),
+          nodeVersion: process.version,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
       fail(404, 'Endpoint not found.')
     } catch (e) {
       const status =

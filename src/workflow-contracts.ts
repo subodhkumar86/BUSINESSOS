@@ -3,6 +3,7 @@ import type { UserRole } from './types.ts'
 export const workflowKinds = [
   'leave',
   'goals',
+  'reviews',
   'appointments',
   'certifications',
   'findings',
@@ -40,6 +41,21 @@ export const workflowSchemas = {
       dueDate: day,
     })
     .strict(),
+  reviews: z
+    .object({
+      employeeId,
+      periodStart: day,
+      periodEnd: day,
+      rating: z.number().int().min(1).max(5),
+      summary: notes,
+      rewardAmount: z.number().finite().min(0).max(1e12).default(0),
+      rewardNote: z.string().trim().max(1000).default(''),
+    })
+    .strict()
+    .refine(
+      (v) => v.periodStart <= v.periodEnd,
+      'Review period end must follow its start.',
+    ),
   appointments: z
     .object({
       title: text,
@@ -86,6 +102,12 @@ export const workflowPatch = z
 export const workflowStates: Record<WorkflowKind, Record<string, string[]>> = {
   leave: { pending: ['approved', 'rejected'], approved: [], rejected: [] },
   goals: { active: ['completed', 'cancelled'], completed: [], cancelled: [] },
+  reviews: {
+    scheduled: ['in_review', 'cancelled'],
+    in_review: ['completed', 'cancelled'],
+    completed: [],
+    cancelled: [],
+  },
   appointments: {
     scheduled: ['completed', 'cancelled'],
     completed: [],
@@ -96,8 +118,9 @@ export const workflowStates: Record<WorkflowKind, Record<string, string[]>> = {
   knowledge: { draft: ['published'], published: ['archived'], archived: [] },
 }
 export const workflowWriters: Record<WorkflowKind, UserRole[]> = {
-  leave: ['owner', 'hr_admin'],
-  goals: ['owner', 'hr_admin'],
+  leave: ['owner', 'hr_admin', 'employee'],
+  goals: ['owner', 'hr_admin', 'employee'],
+  reviews: ['owner', 'hr_admin'],
   appointments: ['owner', 'sales_crm_user'],
   certifications: ['owner', 'operations_manager'],
   findings: ['owner', 'operations_manager'],

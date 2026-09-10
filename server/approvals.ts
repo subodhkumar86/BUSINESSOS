@@ -1,9 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { PoolClient } from 'pg'
-import type { Store } from './store.ts'
-import type { Session } from './security.ts'
-type Fail = (status: number, message: string) => never
 const scope = z.enum(['purchase_order', 'payroll', 'payment', 'master_data'])
 const step = z.object({ role: z.string().min(1).max(60), label: z.string().max(120).default('') }).strict()
 export const chainInput = z.object({

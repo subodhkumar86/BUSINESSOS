@@ -63,7 +63,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [territory, setTerritory] = useState('Nigeria')
+  const territory = 'Nigeria'
   const [revision, setRevision] = useState(0)
 
   // Tax Calculator States

@@ -28,6 +28,7 @@ export interface Employee {
   name: string
   department: string
   amount: number
+  personalRelief?: number
 }
 export interface Project {
   id: string
@@ -174,7 +175,7 @@ const roleCollections: Record<UserRole, readonly string[]> = {
   ],
   sales_crm_user: ['leads', 'customers', 'pipeline', 'campaigns', 'support', 'frontoffice', 'invoices'],
   department_manager: ['projects', 'tasks', 'workspace', 'support', 'automation'],
-  employee: ['tasks', 'workspace', 'self_service'],
+  employee: ['tasks', 'workspace', 'self_service', 'leave', 'goals'],
   auditor: [],
 }
 
@@ -270,7 +271,7 @@ export const roleMatrix: Record<UserRole, RolePermissionInfo> = {
     canDo: 'Assigned tasks, self-service documents, announcements, virtual workspace collaboration',
     restrictions: 'No management of other departments, no access to financial/HR administrative records',
     accessSummary: 'Assigned Tasks, Self-Service Documents, Team Workspace',
-    allowedPages: ['dashboard', 'workspace', 'documents', 'settings'],
+    allowedPages: ['dashboard', 'hr', 'workspace', 'documents', 'settings'],
   },
   auditor: {
     role: 'auditor',

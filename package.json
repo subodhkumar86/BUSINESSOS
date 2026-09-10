@@ -8,7 +8,7 @@
     "build": "npm run typecheck && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/domain.test.js tests/security.test.ts tests/inventory.test.ts tests/completion.test.ts tests/completion2.test.ts tests/tax.test.ts tests/reconciliation.test.ts tests/recruitment.test.ts tests/workflows.test.ts tests/exports.test.ts tests/shipments.test.ts tests/returns.test.ts",
+    "test": "node --test tests/domain.test.js tests/security.test.ts tests/inventory.test.ts tests/completion.test.ts tests/completion2.test.ts tests/tax.test.ts tests/reconciliation.test.ts tests/recruitment.test.ts tests/workflows.test.ts tests/exports.test.ts tests/shipments.test.ts tests/returns.test.ts tests/budget-rfq.test.ts",
     "dev:api": "node --env-file-if-exists=.env --watch server/index.ts",
     "start:api": "node --env-file-if-exists=.env server/index.ts",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
@@ -17,7 +17,8 @@
     "test:integration": "node --env-file-if-exists=.env --test tests/api.test.ts",
     "format": "prettier --write src server scripts tests",
     "test:stack": "node scripts/integration.ts",
-    "doctor": "node scripts/doctor.ts"
+    "doctor": "node scripts/doctor.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "pg": "^8.23.0",
@@ -31,11 +32,11 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.1.0",
+    "@vitejs/plugin-react": "^5.0.4",
     "oxlint": "^1.79.0",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^6.3.0"
   },
   "engines": {
     "node": ">=24.0.0"

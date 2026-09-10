@@ -28,6 +28,18 @@ const config: Record<WorkflowKind, { title: string; fields: Field[] }> = {
       ['dueDate', 'Due date', 'date'],
     ],
   },
+  reviews: {
+    title: 'Performance reviews and rewards',
+    fields: [
+      ['employeeId', 'Employee', 'employee'],
+      ['periodStart', 'Review period starts', 'date'],
+      ['periodEnd', 'Review period ends', 'date'],
+      ['rating', 'Rating (1–5)', 'rating'],
+      ['summary', 'Evaluation summary', 'textarea'],
+      ['rewardAmount', 'Reward amount (NGN, optional)', 'number'],
+      ['rewardNote', 'Reward note', 'text'],
+    ],
+  },
   appointments: {
     title: 'Appointments',
     fields: [
@@ -267,13 +279,19 @@ export function WorkflowPanel({
                     <option key={level}>{level}</option>
                   ))}
                 </select>
+              ) : type === 'rating' ? (
+                <select name={name} defaultValue="3">
+                  {[1, 2, 3, 4, 5].map((rating) => (
+                    <option key={rating} value={rating}>{rating}</option>
+                  ))}
+                </select>
               ) : type === 'textarea' ? (
                 <textarea name={name} required maxLength={4000} />
               ) : (
                 <input
                   name={name}
                   type={type}
-                  required
+                  required={!['rewardAmount', 'rewardNote'].includes(name)}
                   maxLength={160}
                   min={type === 'number' ? '0.01' : undefined}
                   max={type === 'number' ? '1000000000' : undefined}
@@ -344,6 +362,12 @@ export function WorkflowPanel({
                   <dd>
                     {String(row.data.progress || 0)} / {String(row.data.target)}
                   </dd>
+                </>
+              )}
+              {kind === 'reviews' && Number(row.data.rewardAmount || 0) > 0 && (
+                <>
+                  <dt>Reward</dt>
+                  <dd>NGN {Number(row.data.rewardAmount).toLocaleString()} {String(row.data.rewardNote || '')}</dd>
                 </>
               )}
               {Boolean(row.data.evidence) && (

@@ -1671,6 +1671,235 @@ try {
     const audit = await call('/audit-logs', 'GET', undefined, a)
     assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'approval_requested'))
   })
-} finally {
+  await test('budgets, RFQ, lead scores, onboarding and detailed health are tenant-scoped and role-protected', async () => {
+    const a = await register()
+
+    // Onboarding — owner only
+    const onboarding = await call('/onboarding', 'GET', undefined, a)
+    assert.equal(onboarding.status, 200)
+    assert.deepEqual(onboarding.data.completedSteps, [])
+    assert.equal(onboarding.data.dismissed, false)
+    assert.equal((await call('/onboarding', 'PATCH', { completedStep: 'profile' }, a)).status, 200)
+    const updated = await call('/onboarding', 'GET', undefined, a)
+    assert.ok(updated.data.completedSteps.includes('profile'))
+    assert.equal((await call('/onboarding', 'PATCH', { completedStep: 'profile' }, a)).status, 200)
+    const deduped = await call('/onboarding', 'GET', undefined, a)
+    assert.equal(deduped.data.completedSteps.filter((s: string) => s === 'profile').length, 1)
+    assert.equal((await call('/onboarding', 'PATCH', { dismissed: true }, a)).status, 200)
+    assert.equal((await call('/onboarding', 'GET', undefined, a)).data.dismissed, true)
+    assert.equal((await call('/onboarding', 'GET', undefined, other)).status, 200)
+
+    // Budgets — owner and finance_admin can write; auditor reads
+    const budget = await call('/budgets', 'POST', {
+      name: 'Q4 Marketing',
+      department: 'Marketing',
+      periodFrom: '2026-10-01',
+      periodTo: '2026-12-31',
+      totalAmount: 500000,
+    }, a)
+    assert.equal(budget.status, 201)
+    assert.equal(budget.data.status, 'active')
+    assert.equal(budget.data.spentAmount, 0)
+    assert.equal(budget.data.version, 1)
+    const budgetId = budget.data.id
+    assert.equal((await call('/budgets', 'GET', undefined, a)).data.budgets.length >= 1, true)
+    assert.equal((await call('/budgets', 'GET', undefined, other)).data.budgets.length, 0)
+    const patched = await call('/budgets/' + budgetId, 'PATCH', { version: 1, spentAmount: 120000 }, a)
+    assert.equal(patched.status, 200)
+    assert.equal(Number(patched.data.spent_amount), 120000)
+    assert.equal((await call('/budgets/' + budgetId, 'PATCH', { version: 1, spentAmount: 200000 }, a)).status, 409)
+    assert.equal((await call('/budgets', 'POST', { name: 'Bad period', department: '', periodFrom: '2026-12-01', periodTo: '2026-11-01', totalAmount: 1000 }, a)).status, 400)
+    const auditorEmail = randomUUID() + '@example.test', auditorPw = 'budget-auditor-pw-123'
+    await call('/users', 'POST', { name: 'Budget auditor', email: auditorEmail, password: auditorPw, role: 'auditor' }, a)
+    const auditorLogin = await call('/auth/login', 'POST', { email: auditorEmail, password: auditorPw })
+    const auditor = { cookie: auditorLogin.cookie, snapshot: auditorLogin.data } as Account
+    assert.equal((await call('/budgets', 'GET', undefined, auditor)).status, 200)
+    assert.equal((await call('/budgets', 'POST', { name: 'Forbidden', department: '', periodFrom: '2026-01-01', periodTo: '2026-12-31', totalAmount: 1 }, auditor)).status, 403)
+    const closedBudget = await call('/budgets/' + budgetId, 'PATCH', { version: 2, status: 'closed' }, a)
+    assert.equal(closedBudget.status, 200)
+    const audit = await call('/audit-logs', 'GET', undefined, a)
+    assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'budget_created'))
+    assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'budget_updated'))
+
+    // RFQ — operations_manager and owner can write; auditor reads
+    const rfq = await call('/rfq', 'POST', {
+      supplierName: 'Kora Supplies',
+      productDescription: '500 reams A4 paper',
+      quantity: 500,
+      requiredBy: '2026-11-30',
+      notes: 'Urgent',
+    }, a)
+    assert.equal(rfq.status, 201)
+    assert.equal(rfq.data.status, 'sent')
+    assert.match(rfq.data.rfqNumber, /^RFQ-[A-Z0-9]{8}$/)
+    assert.equal(rfq.data.quotedAmount, null)
+    const rfqId = rfq.data.id
+    assert.equal((await call('/rfq', 'GET', undefined, a)).data.rfqs.length >= 1, true)
+    assert.equal((await call('/rfq', 'GET', undefined, other)).data.rfqs.length, 0)
+    const quoted = await call('/rfq/' + rfqId, 'PATCH', { version: 1, quotedAmount: 75000, status: 'quoted' }, a)
+    assert.equal(quoted.status, 200)
+    assert.equal(Number(quoted.data.quoted_amount), 75000)
+    assert.equal((await call('/rfq/' + rfqId, 'PATCH', { version: 1, status: 'accepted' }, a)).status, 409)
+    assert.equal((await call('/rfq/' + rfqId, 'PATCH', { version: 2, status: 'accepted' }, a)).status, 200)
+    assert.equal((await call('/rfq', 'GET', undefined, auditor)).status, 200)
+    assert.equal((await call('/rfq', 'POST', { supplierName: 'Forbidden', productDescription: 'x', quantity: 1 }, auditor)).status, 403)
+    const rfqAudit = await call('/audit-logs', 'GET', undefined, a)
+    assert.ok(rfqAudit.data.entries.some((r: { action: string }) => r.action === 'rfq_created'))
+    assert.ok(rfqAudit.data.entries.some((r: { action: string }) => r.action === 'rfq_updated'))
+
+    // Lead scores — deterministic, tenant-scoped
+    const scores = await call('/crm/lead-scores', 'GET', undefined, a)
+    assert.equal(scores.status, 200)
+    assert.ok(Array.isArray(scores.data.scores))
+    for (const s of scores.data.scores) {
+      assert.ok(s.score >= 0 && s.score <= 100)
+      assert.ok(typeof s.factors.stage === 'number')
+      assert.ok(typeof s.factors.dealSize === 'number')
+    }
+    const otherScores = await call('/crm/lead-scores', 'GET', undefined, other)
+    assert.equal(otherScores.data.scores.some((item: { leadId: string }) => scores.data.scores.some((own: { leadId: string }) => own.leadId === item.leadId)), false)
+
+    // Detailed health — owner, auditor, super_admin only
+    const health = await call('/admin/health/detailed', 'GET', undefined, a)
+    assert.equal(health.status, 200)
+    assert.equal(health.data.status, 'operational')
+    assert.ok(health.data.checks.database.ok)
+    assert.ok(health.data.checks.redis.ok)
+    assert.ok(typeof health.data.checks.database.latencyMs === 'number')
+    assert.ok(typeof health.data.uptime === 'number')
+    assert.ok(typeof health.data.tenant.active_users === 'number')
+    assert.equal((await call('/admin/health/detailed', 'GET', undefined, auditor)).status, 200)
+    const financeEmail2 = randomUUID() + '@example.test'
+    await call('/users', 'POST', { name: 'Finance', email: financeEmail2, password: 'finance-health-pw-123', role: 'finance_admin' }, a)
+    const finLogin = await call('/auth/login', 'POST', { email: financeEmail2, password: 'finance-health-pw-123' })
+    const fin = { cookie: finLogin.cookie, snapshot: finLogin.data } as Account
+    assert.equal((await call('/admin/health/detailed', 'GET', undefined, fin)).status, 403)
+  })
+
+  await test('next completion: payment lifecycle, depreciation, polling, search, MFA and backups', async () => {
+    const a = await register()
+    const search = await call('/search?q=' + encodeURIComponent(a.snapshot.state.products[0].name.slice(0, 4)), 'GET', undefined, a)
+    assert.equal(search.status, 200)
+    assert.ok(search.data.results.length >= 1)
+    assert.equal((await call('/search?q=x', 'GET', undefined, a)).data.results.length, 0)
+    const asset = await call('/assets', 'POST', { name: 'Van', serialNumber: randomUUID(), category: 'Fleet', cost: 1200000, depreciationRate: 20 }, a)
+    assert.equal(asset.status, 201)
+    const nextMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toISOString().slice(0, 7)
+    const dep = await call('/assets/' + asset.data.id + '/depreciation', 'POST', { period: nextMonth }, a)
+    assert.equal(dep.status, 201)
+    assert.ok(dep.data.amount >= 0)
+    assert.equal((await call('/assets/' + asset.data.id + '/depreciation', 'POST', { period: nextMonth }, a)).status, 409)
+    assert.equal((await call('/assets/' + asset.data.id + '/depreciation', 'GET', undefined, a)).data.postings.length, 1)
+    const refreshed = await call('/workspace', 'GET', undefined, a)
+    assert.equal(refreshed.status, 200)
+    a.snapshot = refreshed.data
+    const hr = await save(a, { type: 'payroll', period: '2026-11' })
+    assert.equal(hr.status, 200)
+    a.snapshot = hr.data
+    const runId = hr.data.state.payroll.find((run: { period: string }) => run.period === '2026-11')?.id
+    assert.ok(runId)
+    const approverEmail = randomUUID() + '@example.test'
+    const approverPassword = 'payroll-approver-pw-123'
+    assert.equal((await call('/users', 'POST', { name: 'Payroll finance', email: approverEmail, password: approverPassword, role: 'finance_admin' }, a)).status, 201)
+    const approverLogin = await call('/auth/login', 'POST', { email: approverEmail, password: approverPassword })
+    const approver = { cookie: approverLogin.cookie, snapshot: approverLogin.data } as Account
+    const approved = await save(approver, { type: 'status', collection: 'payroll', id: runId, status: 'Approved' })
+    assert.equal(approved.status, 200)
+    const ownerRefresh = await call('/workspace', 'GET', undefined, a)
+    assert.equal(ownerRefresh.status, 200)
+    a.snapshot = ownerRefresh.data
+    const batch = await call(`/payroll/runs/${runId}/payment-batches`, 'POST', {}, a, { 'Idempotency-Key': randomUUID() })
+    assert.equal(batch.status, 201)
+    assert.equal((await call(`/payroll/runs/${runId}/payment-batches`, 'PATCH', { status: 'confirmed' }, a)).status, 409)
+    assert.equal((await call(`/payroll/runs/${runId}/payment-batches`, 'PATCH', { status: 'submitted' }, a)).data.batch.status, 'submitted')
+    assert.equal((await call(`/payroll/runs/${runId}/payment-batches`, 'PATCH', { status: 'confirmed' }, a)).data.batch.status, 'confirmed')
+    const account = await call('/banks/accounts', 'POST', { provider: 'manual', externalRef: randomUUID(), name: 'Poll account', currency: 'NGN' }, a)
+    assert.equal(account.status, 201)
+    assert.equal((await call(`/banks/accounts/${account.data.id}/poll`, 'POST', {}, a)).status, 201)
+    assert.equal((await call(`/banks/accounts/${account.data.id}/poll`, 'GET', undefined, a)).data.polls.length, 1)
+    const mfa = await call('/auth/mfa', 'POST', {}, a)
+    assert.equal(mfa.status, 201)
+    assert.equal((await call('/auth/mfa/verify', 'POST', { code: mfa.data.previewCode }, a)).data.verified, true)
+    assert.equal((await call('/auth/mfa', 'GET', undefined, a)).data.verified, true)
+    const backup = await call('/admin/backups', 'POST', { label: 'nightly' }, a)
+    assert.equal(backup.status, 201)
+    assert.equal((await call('/admin/backups', 'GET', undefined, a)).data.backups.length, 1)
+  })
+  await test('employee self-service: can submit own leave and goals, cannot approve own leave or access others', async () => {
+    const a = await register()
+    const firstEmp = a.snapshot.state.employees[0]
+    if (!firstEmp) return
+    const empEmail = randomUUID() + '@example.test'
+    const empPw = 'employee-self-service-pw-123'
+    // Create user whose display name matches the employee record
+    assert.equal((await call('/users', 'POST', { name: firstEmp.name, email: empEmail, password: empPw, role: 'employee' }, a)).status, 201)
+    const empLogin = await call('/auth/login', 'POST', { email: empEmail, password: empPw })
+    const emp = { cookie: empLogin.cookie, snapshot: empLogin.data } as Account
+    // Employee can read leave workflow
+    assert.equal((await call('/workflows/leave', 'GET', undefined, emp)).status, 200)
+    // Employee can submit leave for their own record
+    const leaveKey = randomUUID()
+    const leave = await call('/workflows/leave', 'POST',
+      { employeeId: firstEmp.id, startDate: '2026-12-01', endDate: '2026-12-03', reason: 'Annual leave' },
+      emp, { 'Idempotency-Key': leaveKey })
+    assert.equal(leave.status, 201)
+    assert.equal(leave.data.status, 'pending')
+    // Idempotent retry returns same record
+    assert.equal((await call('/workflows/leave', 'POST',
+      { employeeId: firstEmp.id, startDate: '2026-12-01', endDate: '2026-12-03', reason: 'Annual leave' },
+      emp, { 'Idempotency-Key': leaveKey })).data.id, leave.data.id)
+    // Employee cannot approve their own leave
+    assert.equal((await call('/workflows/leave/' + leave.data.id, 'PATCH', { version: 1, status: 'approved' }, emp)).status, 403)
+    // HR admin can approve it
+    const hrEmail = randomUUID() + '@example.test'
+    await call('/users', 'POST', { name: 'HR Self', email: hrEmail, password: empPw, role: 'hr_admin' }, a)
+    const hrLogin = await call('/auth/login', 'POST', { email: hrEmail, password: empPw })
+    const hr = { cookie: hrLogin.cookie, snapshot: hrLogin.data } as Account
+    assert.equal((await call('/workflows/leave/' + leave.data.id, 'PATCH', { version: 1, status: 'approved' }, hr)).status, 200)
+    // Employee cannot submit leave for a different employee
+    const otherEmp = a.snapshot.state.employees[1]
+    if (otherEmp) {
+      assert.equal((await call('/workflows/leave', 'POST',
+        { employeeId: otherEmp.id, startDate: '2026-12-10', endDate: '2026-12-11', reason: 'Sick' },
+        emp, { 'Idempotency-Key': randomUUID() })).status, 403)
+    }
+    // Employee can create and update their own goal
+    const goal = await call('/workflows/goals', 'POST',
+      { employeeId: firstEmp.id, title: 'Close 5 deals', target: 5, unit: 'deals', dueDate: '2026-12-31' },
+      emp, { 'Idempotency-Key': randomUUID() })
+    assert.equal(goal.status, 201)
+    assert.equal((await call('/workflows/goals/' + goal.data.id, 'PATCH', { version: 1, progress: 3 }, emp)).status, 200)
+    // Cannot complete without reaching target
+    assert.equal((await call('/workflows/goals/' + goal.data.id, 'PATCH', { version: 2, status: 'completed', progress: 3 }, emp)).status, 409)
+    // Can complete once target is reached
+    assert.equal((await call('/workflows/goals/' + goal.data.id, 'PATCH', { version: 2, status: 'completed', progress: 5 }, emp)).status, 200)
+    // Audit trail records self-service actions
+    const audit = await call('/audit-logs', 'GET', undefined, a)
+    assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'leave_created'))
+    assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'goals_created'))
+  })
+
+  await test('production completion consumes materials and posts finished goods once', async () => {
+    const a = await register()
+    const material = a.snapshot.state.products[0]
+    const output = a.snapshot.state.products[1]
+    const originalMaterial = material.qty
+    const originalOutput = output.qty
+    const batch = await call('/production/batches', 'POST', {
+      batchNumber: 'PROD-' + randomUUID().slice(0, 8),
+      productName: output.name,
+      outputProductId: output.id,
+      materials: [{ productId: material.id, quantity: 2 }],
+      plannedQty: 3,
+    }, a)
+    assert.equal(batch.status, 201)
+    assert.equal((await call('/production/batches/' + batch.data.id, 'PATCH', { status: 'running' }, a)).status, 200)
+    assert.equal((await call('/production/batches/' + batch.data.id, 'PATCH', { status: 'qa_check' }, a)).status, 200)
+    assert.equal((await call('/production/batches/' + batch.data.id, 'PATCH', { status: 'completed', completedQty: 3, defectCount: 1 }, a)).status, 200)
+    const refreshed = await call('/workspace', 'GET', undefined, a)
+    assert.equal(refreshed.status, 200)
+    assert.equal(refreshed.data.state.products.find((p: { id: string }) => p.id === material.id).qty, originalMaterial - 2)
+    assert.equal(refreshed.data.state.products.find((p: { id: string }) => p.id === output.id).qty, originalOutput + 2)
+  })} finally {
   await app.close()
 }

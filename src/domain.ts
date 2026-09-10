@@ -67,8 +67,9 @@ export const seed = (): State => hydrateInventory({
       name: 'Amara Okafor',
       department: 'Operations',
       amount: 350000,
+      personalRelief: 20000,
     },
-    { id: 'e2', name: 'Tunde Adeyemi', department: 'Sales', amount: 280000 },
+    { id: 'e2', name: 'Tunde Adeyemi', department: 'Sales', amount: 280000, personalRelief: 15000 },
   ],
   payroll: [],
   projects: [
@@ -120,7 +121,7 @@ export function generateIncomeStatement(state: State, period: ReportingPeriod = 
   const revenue = -accountBalance(s, 'Sales') || 0
   const cogs = accountBalance(s, 'Cost of goods sold')
   const grossProfit = roundMoney(revenue - cogs)
-  const operatingExpenses = roundMoney(accountBalance(s, 'Operating expenses') + accountBalance(s, 'Payroll expense') + accountBalance(s, 'Inventory adjustment expense') + accountBalance(s, 'Inventory adjustment gain'))
+  const operatingExpenses = roundMoney(accountBalance(s, 'Operating expenses') + accountBalance(s, 'Payroll expense') + accountBalance(s, 'Depreciation expense') + accountBalance(s, 'Inventory adjustment expense') + accountBalance(s, 'Inventory adjustment gain'))
   return { period: periodLabel(period), revenue, cogs, grossProfit, grossMarginPercent: revenue ? roundMoney(grossProfit / revenue * 100) : 0, operatingExpenses, netProfit: roundMoney(grossProfit - operatingExpenses) }
 }
 export function generateBalanceSheet(state: State, period: ReportingPeriod = {}): BalanceSheet {
@@ -146,11 +147,12 @@ export function generateCashFlowStatement(state: State, period: ReportingPeriod 
 /**
  * Statutory Payroll Calculation Engine (Nigerian PITA & Pension Reform Act 2014)
  */
-export function calculateStatutoryPayroll(gross: number, rulesVersion = 'NG-2026-v1'): StatutoryPayrollBreakdown {
+export function calculateStatutoryPayroll(gross: number, rulesVersion = 'NG-2026-v1', personalRelief = 0): StatutoryPayrollBreakdown {
   if (!Number.isFinite(gross) || gross < 0) throw Error('Gross pay must be a finite non-negative amount.')
   if (rulesVersion === 'NG-2026-v1') {
     const employeePension = roundMoney(gross * 0.08), employerPension = roundMoney(gross * 0.10)
-    let remaining = Math.max(0,(gross-employeePension)*12), annualTax=0
+    const relief = Math.max(0, personalRelief || 0)
+    let remaining = Math.max(0,(gross-employeePension-relief)*12), annualTax=0
     const bands: [number,number][] = [[800000,0],[2200000,0.15],[9000000,0.18],[13000000,0.21],[25000000,0.23],[Infinity,0.25]]
     for (const [width,rate] of bands) { const value=Math.min(remaining,width); annualTax+=value*rate; remaining-=value; if(remaining<=0) break }
     const payeTax = gross <= 70000 ? 0 : roundMoney(annualTax/12)
@@ -220,7 +222,7 @@ export function generatePayslips(s: State, runId: string): EmployeePayslip[] {
   const employees = run.inputs
 
   return employees.map((emp) => {
-    const calc = calculateStatutoryPayroll(emp.amount, run.rulesVersion)
+    const calc = calculateStatutoryPayroll(emp.amount, run.rulesVersion, emp.personalRelief || 0)
     return {
       id: `slip-${run.id}-${emp.id}`,
       employeeId: emp.id,
@@ -251,7 +253,7 @@ const schemas = {
     .object({ name: textValue, amount, status: z.literal('New').optional() })
     .strict(),
   employees: z
-    .object({ name: textValue, department: textValue, amount })
+    .object({ name: textValue, department: textValue, amount, personalRelief: numericInput.pipe(z.number().finite().min(0).max(1e9)).optional() })
     .strict(),
   projects: z
     .object({

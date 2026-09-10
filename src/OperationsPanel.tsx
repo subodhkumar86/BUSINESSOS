@@ -89,7 +89,7 @@ export function OperationsPanel({
               Object.fromEntries(
                 config.fields.map(([name, , type]) => [
                   name,
-                  type === 'number' ? Number(form.get(name)) : form.get(name),
+                  type === 'number' ? Number(form.get(name)) : name === 'materials' ? JSON.parse(String(form.get(name) || '[]')) : form.get(name),
                 ]),
               ),
             )
@@ -114,7 +114,8 @@ export function OperationsPanel({
                     type={type}
                     min="0"
                     step={type === 'number' ? 'any' : undefined}
-                    required
+                    required={name !== 'outputProductId'}
+                    defaultValue={name === 'materials' ? '[]' : undefined}
                   />
                 )}
               </label>

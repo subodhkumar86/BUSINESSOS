@@ -3,12 +3,13 @@
 Scope: PRD sections 7.1, 10, 12, 18 and 25. No external messages or payments are sent by these workflows.
 
 Routes: GET/POST /api/v1/workflows/:kind; PATCH /api/v1/workflows/:kind/:id.
-Kinds: leave, goals, appointments, certifications, findings, knowledge.
+Kinds: leave, goals, reviews, appointments, certifications, findings, knowledge.
 
 All routes require a current authenticated session; mutations require CSRF. Tenant row-level security, strict schemas, server-side role checks, plan checks, row locking, optimistic versions and transactional audits apply. Creation retries require an idempotency key; the same key with different input is rejected.
 
-- Leave: owner/HR manage requests for existing tenant employees; auditors read. Start/end dates must be valid and ordered. Pending requests can be approved or rejected. Overlapping pending/approved leave for one employee is rejected. Self-approval is forbidden. No automatic payroll deduction.
-- Goals: owner/HR define an existing employee's measurable goal and deadline; track progress; close only when target is reached. Auditors read.
+- Leave: owner/HR/employee manage requests for existing tenant employees; auditors read. Start/end dates must be valid and ordered. Pending requests can be approved or rejected. Overlapping pending/approved leave for one employee is rejected. Self-approval is forbidden. No automatic payroll deduction. **Employee self-service**: employees can create and update leave requests only for their own employee record (matched by name). Approval by a different HR user or owner is still required.
+- Goals: owner/HR/employee define an existing employee's measurable goal and deadline; track progress; close only when target is reached. Auditors read. **Employee self-service**: employees can create and update progress on goals only for their own employee record.
+- Reviews: owner/HR create a dated performance evaluation for an existing employee with a 1–5 rating, evidence-based summary and optional NGN reward amount/note. Auditors read. Reviews progress from scheduled to in review and then completed (or cancelled); they do not create a payroll payment or journal entry.
 - Appointments: owner/sales create scheduled bookings with guest, host, room and explicit timestamps. Overlapping active room bookings are rejected. Complete or cancel once; no automatic external reminders.
 - Certifications: owner/operations manage policy/certification records with issuer and expiry date. Audit/HR/finance may read. Revocation is final.
 - Findings: owner/operations create audit findings, corrective actions and due dates. Closure requires resolution evidence. Audit/HR/finance may read.
@@ -40,3 +41,19 @@ Lifecycle: inspecting → inspected (condition and inspection notes required) �
 Restock increases product quantity and optional warehouse allocation, appends a return stock movement at original dispatch unit cost, posts Inventory debit / Cost of goods sold credit, updates tenant/return versions, and appends audit plus idempotency receipt in one transaction. If the product cost has changed, fail rather than silently mix valuation methods; revaluation/lot costing is separate work. Stock quantity/precision ceilings apply.
 
 This does not issue customer credits/refunds, transfer money, create revenue/tax reversals, or process exchanges. Legacy tracking-only returns remain separate and must not generate hidden financial events.
+
+## Payroll personal relief (NG-2026-v1)
+
+PRD: section 14 (payroll), Nigeria Tax Act Fourth Schedule.
+
+The `Employee` record accepts an optional `personalRelief` amount (NGN per month). When set, it is deducted from the taxable base before PAYE bands are applied in the `NG-2026-v1` rules version. The relief is clamped to zero so it cannot produce a negative taxable income. Employee pension (8% of gross) is unaffected. The legacy `NG-PITA-legacy-v1` rules version uses its own Consolidated Relief Allowance and ignores this field.
+
+Set `personalRelief` when creating or updating an employee record. The value is snapshotted into the payroll run inputs at the time the run is prepared; changing it after preparation does not affect historical runs. Jurisdiction-specific reliefs beyond this field (rent relief, benefit-in-kind, irregular income) remain unimplemented.
+
+## Employee self-service
+
+PRD: section 12 (HR), section 5 (RBAC).
+
+Employees can submit leave requests and create/update progress on their own performance goals via the HR page. The server matches the employee record by name against the authenticated user's display name. If no matching employee record exists, the request is rejected with a 403 and a message directing the user to their HR administrator.
+
+Employees cannot approve their own leave (separation-of-duties check unchanged), cannot write appointments, certifications, findings or knowledge, and cannot view other employees' leave or goal records beyond what the scoped workspace snapshot exposes.

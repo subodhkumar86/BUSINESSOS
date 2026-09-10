@@ -58,6 +58,19 @@ test('workflow schemas reject impossible dates, unknown fields, inverted ranges 
   )
   assert.equal(workflowPatch.safeParse({ version: 1 }).success, false)
 })
+
+test('performance reviews validate their period, rating and reward values', () => {
+  const valid = workflowSchemas.reviews.parse({
+    employeeId: 'employee-1',
+    periodStart: '2026-01-01',
+    periodEnd: '2026-03-31',
+    rating: 4,
+    summary: 'Exceeded the quarterly delivery target.',
+  })
+  assert.equal(valid.rewardAmount, 0)
+  assert.throws(() => workflowSchemas.reviews.parse({ ...valid, rating: 6 }))
+  assert.throws(() => workflowSchemas.reviews.parse({ ...valid, periodEnd: '2025-12-31' }))
+})
 test('goals require target completion and findings require evidence and ordered closure', () => {
   assert.throws(
     () =>
@@ -120,4 +133,13 @@ test('HR and compliance workflows restrict access while published knowledge can 
   assert.equal(canReadWorkflow('knowledge', 'super_admin'), false)
   assert.equal(workflowWriters.leave.includes('auditor'), false)
   assert.equal(canReadWorkflow('findings', 'auditor'), true)
+  // Employee self-service: can read and write leave/goals
+  assert.equal(canReadWorkflow('leave', 'employee'), true)
+  assert.equal(canReadWorkflow('goals', 'employee'), true)
+  assert.equal(workflowWriters.leave.includes('employee'), true)
+  assert.equal(workflowWriters.goals.includes('employee'), true)
+  // Employees cannot write appointments, certifications, findings or knowledge
+  assert.equal(workflowWriters.appointments.includes('employee'), false)
+  assert.equal(workflowWriters.certifications.includes('employee'), false)
+  assert.equal(workflowWriters.findings.includes('employee'), false)
 })
