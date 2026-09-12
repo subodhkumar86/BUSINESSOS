@@ -336,46 +336,46 @@ export function SuppliersPanel({
         </section>
       )}
 
-      {/* Supplier Performance & Assurance */}
-      <div className="two-col" style={{ marginTop: '16px' }}>
+      {/* Supplier operating cues use the current directory, not invented service metrics. */}
+      <div className="two-col supplier-cues">
         <section className="card">
-          <h2>Vendor Performance Benchmarks</h2>
+          <h2>Supplier operating cues</h2>
           <div className="telemetry-list">
             <div className="telemetry-item">
-              <span>On-Time Shipment Rate</span>
-              <b style={{ color: '#16a34a' }}>94.2%</b>
+              <span>Active vendors available</span>
+              <b>{suppliers.filter((s) => s.status === 'active').length}</b>
             </div>
             <div className="telemetry-item">
-              <span>Quality Acceptance on Receipt</span>
-              <b>99.1%</b>
+              <span>Suppliers under review</span>
+              <b>{suppliers.filter((s) => s.status === 'review').length}</b>
             </div>
             <div className="telemetry-item">
-              <span>Avg Procurement Turnaround</span>
-              <b>11.4 days</b>
+              <span>Typical listed lead time</span>
+              <b>{avgLeadTime || '—'}{avgLeadTime ? ' days' : ''}</b>
             </div>
             <div className="telemetry-item">
-              <span>PO Payment Discrepancy Rate</span>
-              <b style={{ color: '#16a34a' }}>0.3%</b>
+              <span>Fastest listed lead time</span>
+              <b>{suppliers.length ? Math.min(...suppliers.map((s) => s.lead_days)) + ' days' : '—'}</b>
             </div>
           </div>
         </section>
 
         <section className="card">
-          <h2>Compliance & Contract Governance</h2>
+          <h2>Procurement controls</h2>
           <div className="preview-list">
             <div className="preview-row">
               <div>
-                <b>Standard Supply Agreement v2.4</b>
-                <small>Governs lead times, return policies, and defective item credit.</small>
+                <b>Review suppliers before ordering</b>
+                <small>Use the directory status to keep suppliers under review out of normal purchasing decisions.</small>
               </div>
-              <span className="badge green">Active</span>
+              <span className="badge">Directory control</span>
             </div>
             <div className="preview-row">
               <div>
-                <b>Tax Identification & WHT Certificates</b>
-                <small>FIRS vendor deduction and TIN verification required before payment.</small>
+                <b>Keep source documents with the purchase</b>
+                <small>Use Documents & Media to retain supplier agreements, tax records and delivery evidence.</small>
               </div>
-              <span className="badge green">Verified</span>
+              <span className="badge">Workflow guidance</span>
             </div>
           </div>
         </section>

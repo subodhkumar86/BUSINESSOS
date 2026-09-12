@@ -28,6 +28,8 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
@@ -35,6 +37,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "oxlint": "^1.79.0",
     "prettier": "^3.9.6",
+    "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^6.3.0"
   },

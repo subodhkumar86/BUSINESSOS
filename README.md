@@ -83,6 +83,8 @@ The nine core screens and existing invoice, expense, inventory, purchasing, CRM,
 | Endpoint                                          | Access                                       | Purpose                                                                       |
 | ------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------- |
 | GET /api/v1/health                                | Public                                       | PostgreSQL/Redis readiness                                                    |
+| GET /api/v1/public/support/:portalSlug             | Public                                       | Published knowledge-base article directory only                               |
+| GET /api/v1/public/support/:portalSlug/articles/:id | Public                                      | One published knowledge-base article                                           |
 | POST /api/v1/auth/register                        | Public, rate limited                         | Create tenant and owner                                                       |
 | POST /api/v1/auth/login                           | Public, rate limited                         | Issue Redis session                                                           |
 | POST /api/v1/auth/logout                          | Session + CSRF                               | Revoke session                                                                |
@@ -203,7 +205,7 @@ Run `npm.cmd run db:migrate` first; migrations `027-029` add branches, approval 
 - Configurable multi-step approvals: `GET/POST/PATCH /api/v1/approvals/chains` plus `GET/POST/PATCH /api/v1/approvals/requests` with default PO/payroll/payment chains, amount matching, role-step enforcement, separation of duties and audited decisions.
 - Branches: `GET/POST/PATCH /api/v1/branches` with unique codes and optimistic versions for BUS-012 scoping.
 - Recruitment interviews: `GET/POST /api/v1/hr/candidates/:id/interviews` with scheduling, scoring schema and audit events.
-- Notification adapters: `POST/GET /api/v1/notifications/outbox` queues email/SMS/WhatsApp/push through a provider interface (`NOTIFY_PROVIDER`, default `local-log`), and `POST /.../:id/deliver` runs the audited local delivery worker. External credentials are not required and nothing is sent outside the database.
+- Notification adapters: `POST/GET /api/v1/notifications/outbox` queues email/SMS/WhatsApp/push through a provider interface. `POST /.../:id/deliver` only marks a message sent after a configured, server-side HTTPS webhook accepts its signed payload. Without `NOTIFY_PROVIDER=webhook` and `NOTIFY_WEBHOOK_URL`, it records a failed delivery rather than falsely claiming a message was sent.
 - New **Approvals & Branches** workspace screen manages branches, chains, forecast runs, the outbox and pending approvals in one place.
 
 ## Next completion — 10 September 2026

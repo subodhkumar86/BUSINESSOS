@@ -44,36 +44,23 @@ const demoTickets: SupportTicket[] = [
   },
 ]
 
-const kbArticles = [
-  {
-    title: 'How to download statutory withholding tax receipts (WHT)',
-    category: 'Finance & Tax',
-    snippet: 'Go to Finance & AR/AP, open the collection record, and click "Download WHT Remittance Schedule" for the corresponding reporting quarter.',
-  },
-  {
-    title: 'Warehouse goods receipt and discrepancy inspection procedure',
-    category: 'Warehouse & Logistics',
-    snippet: 'All inbound goods must be matched against the purchase order reference. If damaged during transit, select "Damaged" in the RMA inspection queue.',
-  },
-  {
-    title: 'Employee pension contribution remit schedules (PenCom)',
-    category: 'HR & Payroll',
-    snippet: 'Pension calculations follow the 8% employee and 10% employer statutory minimums. Approved payroll batches generate payment confirmation keys.',
-  },
-]
-
 export function SupportPanel({ remote }: { remote: Snapshot | null }) {
   const [tickets, setTickets] = useState<SupportTicket[]>(() =>
     remote ? [] : demoTickets,
   )
+  const [feedbackMetrics, setFeedbackMetrics] = useState({ responses: 0, csat: 0, nps: 0, nps_score: 0 })
   const [loading, setLoading] = useState(Boolean(remote))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'pending' | 'resolved' | 'closed'>('all')
-  const [activeKb, setActiveKb] = useState<number | null>(null)
   const [revision, setRevision] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const editable = !remote || remote.user.role !== 'auditor'
 
@@ -90,6 +77,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
       .finally(() => {
         if (active) setLoading(false)
       })
+    request<{ metrics: typeof feedbackMetrics }>('/support/feedback/metrics').then((data) => { if (active) setFeedbackMetrics(data.metrics) }).catch(() => {})
     return () => {
       active = false
     }
@@ -177,6 +165,17 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
       setBusy(false)
     }
   }
+  async function recordFeedback(ticketId: string, form: HTMLFormElement) {
+    if (!remote || busy) return
+    const data = new FormData(form)
+    setBusy(true); setError(''); setNotice('')
+    try {
+      await request(`/support/tickets/${ticketId}/feedback`, { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ csat: Number(data.get('csat')), nps: Number(data.get('nps')), comment: String(data.get('comment') || '') }) })
+      setNotice('Customer feedback recorded.')
+      form.reset()
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not record feedback.') }
+    finally { setBusy(false) }
+  }
 
   const filtered = tickets.filter((t) => {
     const matchesSearch =
@@ -193,9 +192,9 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
       return <span className="badge green">✓ Resolved</span>
     }
     if (!slaDateStr) return <span className="badge">No SLA</span>
-    const diff = new Date(slaDateStr).getTime() - Date.now()
-    const hours = Math.round(diff / (1000 * 3600))
-    if (hours < 0) {
+    const diff = new Date(slaDateStr).getTime() - now
+    const hours = Math.ceil(Math.abs(diff) / (1000 * 3600))
+    if (diff < 0) {
       return (
         <span className="badge" style={{ background: '#fee2e2', color: '#b91c1c' }}>
           🚨 Breached ({Math.abs(hours)}h ago)
@@ -218,7 +217,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
 
   return (
     <div className="module-panel">
-      {/* Telemetry Row */}
+      {/* Queue metrics derive from ticket records. */}
       <div className="stats-row">
         <div className="stat-card">
           <span className="stat-label">Open Tickets</span>
@@ -226,20 +225,22 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
           <small>Awaiting operator triage</small>
         </div>
         <div className="stat-card">
-          <span className="stat-label">Avg First Response</span>
-          <b className="stat-value">1h 45m</b>
-          <small>Under 2h target SLA</small>
+          <span className="stat-label">Pending tickets</span>
+          <b className="stat-value">{tickets.filter((t) => t.status === 'pending').length}</b>
+          <small>Awaiting a customer or internal update</small>
         </div>
         <div className="stat-card">
-          <span className="stat-label">CSAT Score</span>
-          <b className="stat-value" style={{ color: '#16a34a' }}>4.8 / 5.0</b>
-          <small>96% satisfaction rate</small>
+          <span className="stat-label">Resolved tickets</span>
+          <b className="stat-value">{tickets.filter((t) => t.status === 'resolved' || t.status === 'closed').length}</b>
+          <small>Completed queue records</small>
         </div>
         <div className="stat-card">
-          <span className="stat-label">SLA Compliance</span>
-          <b className="stat-value" style={{ color: '#16a34a' }}>97.4%</b>
-          <small>Resolution within service agreement</small>
+          <span className="stat-label">SLA attention</span>
+          <b className="stat-value">{tickets.filter((t) => !['resolved', 'closed'].includes(t.status) && t.sla_due_at && new Date(t.sla_due_at).getTime() - now <= 4 * 3600000).length}</b>
+          <small>Open tickets due within four hours or overdue</small>
         </div>
+        <div className="stat-card"><span className="stat-label">CSAT</span><b className="stat-value">{Number(feedbackMetrics.csat).toFixed(1)} / 5</b><small>{feedbackMetrics.responses} feedback responses</small></div>
+        <div className="stat-card"><span className="stat-label">NPS score</span><b className="stat-value">{Number(feedbackMetrics.nps_score).toFixed(0)}</b><small>Average rating {Number(feedbackMetrics.nps).toFixed(1)} / 10</small></div>
       </div>
 
       {error && <p role="alert" className="notice error">{error}</p>}
@@ -324,6 +325,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
                         <option value="resolved">Resolved</option>
                         <option value="closed">Closed</option>
                       </select>
+                      {remote && editable && ['resolved', 'closed'].includes(t.status) && <details><summary>Record feedback</summary><form onSubmit={(event) => { event.preventDefault(); void recordFeedback(t.id, event.currentTarget) }}><label>CSAT<select name="csat" defaultValue="5"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label><label>NPS<select name="nps" defaultValue="10">{Array.from({ length: 11 }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label><label>Comment<textarea name="comment" maxLength={2000} /></label><button disabled={busy}>Save feedback</button></form></details>}
                     </td>
                   </tr>
                 ))}
@@ -360,36 +362,6 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
         </section>
       )}
 
-      {/* Knowledge Base Self-Service */}
-      <section className="card" style={{ marginTop: '16px' }}>
-        <h2>Knowledge Base & Resolution Playbooks</h2>
-        <small style={{ display: 'block', marginBottom: '12px' }}>
-          Standardized resolution articles to resolve customer inquiries quickly and accurately.
-        </small>
-        <div className="preview-list">
-          {kbArticles.map((kb, idx) => (
-            <div
-              className="preview-row"
-              key={kb.title}
-              onClick={() => setActiveKb(activeKb === idx ? null : idx)}
-              style={{ cursor: 'pointer' }}
-            >
-              <div>
-                <b>{kb.title}</b>
-                <small>{kb.category}</small>
-                {activeKb === idx && (
-                  <p style={{ marginTop: '6px', fontSize: '13px', color: '#4b5563' }}>
-                    {kb.snippet}
-                  </p>
-                )}
-              </div>
-              <span className="badge">
-                {activeKb === idx ? 'Collapse ▴' : 'Read Article ▾'}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   )
 }

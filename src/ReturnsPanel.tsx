@@ -118,14 +118,27 @@ export function ReturnsPanel({
   const visible = rows.filter(
     (row) => filter === 'all' || row.status === filter,
   )
+  const count = (status: ShipmentReturn['status']) =>
+    rows.filter((row) => row.status === status).length
+  const awaitingDecision = count('inspecting') + count('inspected')
   return (
     <section className="panel">
-      <h2>Shipment returns and inspection</h2>
-      <p>
-        Record returned goods against a dispatched shipment. Restockable goods
-        restore inventory at the original dispatch cost. Customer refunds and
-        credits require a separate finance workflow.
-      </p>
+      <div className="section-top">
+        <div>
+          <h2>Returns and inspection</h2>
+          <p>
+            Link a return to its original dispatch, inspect it, then make the
+            controlled inventory decision.
+          </p>
+        </div>
+        <span className="badge">{awaitingDecision} awaiting decision</span>
+      </div>
+      <div className="stats-row shipment-stats" aria-label="Return summary">
+        <div className="stat-card"><span>Inspecting</span><strong>{count('inspecting')}</strong><small>Needs an inspection</small></div>
+        <div className="stat-card"><span>Ready to decide</span><strong>{count('inspected')}</strong><small>Restock or close as damaged</small></div>
+        <div className="stat-card"><span>Restocked</span><strong>{count('restocked')}</strong><small>Inventory reversal posted</small></div>
+      </div>
+      <p className="muted">Restocking reverses the original inventory and COGS entry. Customer refunds and credits remain controlled Finance workflows.</p>
       {error && (
         <p role="alert" className="notice error">
           {error}
@@ -168,6 +181,7 @@ export function ReturnsPanel({
                 </option>
               ))}
             </select>
+            {!eligible.length && <small>No dispatched shipments currently have quantities available to return.</small>}
           </label>
           <label>
             Returned quantity
@@ -230,12 +244,13 @@ export function ReturnsPanel({
       ) : visible.length ? (
         visible.map((row) => (
           <article className="card" key={row.id}>
-            <h3>
-              {row.order_ref} · {row.product_name}
-            </h3>
+            <div className="section-top">
+              <h3>{row.order_ref} · {row.product_name}</h3>
+              <span className={row.status === 'restocked' ? 'badge green' : row.status === 'closed_damaged' ? 'badge red' : 'badge'}>{row.status.replaceAll('_', ' ')}</span>
+            </div>
             <p>
               {row.customer} · {row.quantity} units ·{' '}
-              {row.status.replaceAll('_', ' ')}
+              Return recorded
             </p>
             <p>Reason: {row.reason}</p>
             <p>

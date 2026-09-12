@@ -27,3 +27,5 @@ dist-ssr
 !.env.example
 .npm-cache/
 data/
+test-results/
+playwright-report/

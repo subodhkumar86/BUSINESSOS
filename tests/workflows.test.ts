@@ -56,6 +56,14 @@ test('workflow schemas reject impossible dates, unknown fields, inverted ranges 
     }).success,
     false,
   )
+  assert.equal(
+    workflowSchemas.appointments.safeParse({
+      title: 'Visit', guest: 'Guest', host: 'Host', room: 'A',
+      startAt: '2026-09-10T11:00:00Z', endAt: '2026-09-10T12:00:00Z',
+      reminderAt: '2026-09-10T10:00:00Z',
+    }).success,
+    false,
+  )
   assert.equal(workflowPatch.safeParse({ version: 1 }).success, false)
 })
 

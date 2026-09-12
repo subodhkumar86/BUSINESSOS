@@ -73,15 +73,33 @@ export function OperationsPanel({
       setBusy(false)
     }
   }
+  async function queueCampaign(id: string, form: HTMLFormElement) {
+    if (!remote || busy) return
+    const data = new FormData(form)
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await request<{ queued: number; skipped: number }>(config.path + '/' + id + '/queue', {
+        method: 'POST', headers: { 'X-CSRF-Token': remote.csrf },
+        body: JSON.stringify({ subject: data.get('subject'), body: data.get('body') }),
+      })
+      setNotice(`${result.queued} opted-in contact${result.queued === 1 ? '' : 's'} queued${result.skipped ? `; ${result.skipped} already queued.` : '.'}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not queue campaign.')
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <section className="panel operations-panel">
-      <h2>{config.title}</h2>
-      {!remote && <p className="notice">Sign in to manage tenant records.</p>}
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+    <section className="panel operations-panel mx-auto w-full space-y-5">
+      <h2 className="text-lg font-bold tracking-tight text-emerald-950">{config.title}</h2>
+      {!remote && <p className="notice rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Sign in to manage tenant records.</p>}
+      {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">{error}</p>}
+      {notice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{notice}</p>}
       {editable && (
         <form
-          className="inline-form"
+          className="inline-form rounded-2xl border border-emerald-100 bg-emerald-50/40 p-1"
           onSubmit={(event) => {
             event.preventDefault()
             const form = new FormData(event.currentTarget)
@@ -120,7 +138,7 @@ export function OperationsPanel({
                 )}
               </label>
             ))}
-            <button className="primary">Create record</button>
+            <button className="primary inline-flex items-center justify-center gap-2 shadow-sm">Create record</button>
           </fieldset>
         </form>
       )}
@@ -133,7 +151,7 @@ export function OperationsPanel({
         />
       </label>
       {busy && <p role="status">Loading data…</p>}
-      <div className="table-wrap">
+      <div className="table-wrap overflow-hidden shadow-sm">
         <table>
           <thead>
             <tr>
@@ -208,6 +226,17 @@ export function OperationsPanel({
                             </label>
                           ))}
                           <button disabled={busy}>Save changes</button>
+                        </form>
+                      </details>
+                    )}
+                    {editable && module === 'campaigns' && ['planning', 'active'].includes(String(row.status)) && (
+                      <details>
+                        <summary>Queue opted-in contacts</summary>
+                        <form onSubmit={(event) => { event.preventDefault(); void queueCampaign(String(row.id), event.currentTarget) }}>
+                          <p>Only active customers with recorded marketing consent and an email address will be queued.</p>
+                          <label>Subject<input name="subject" required maxLength={200} defaultValue={String(row.name || 'Business update')} /></label>
+                          <label>Message<textarea name="body" required maxLength={8000} /></label>
+                          <button disabled={busy}>Queue campaign</button>
                         </form>
                       </details>
                     )}

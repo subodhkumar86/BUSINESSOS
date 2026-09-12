@@ -45,10 +45,12 @@ const config: Record<WorkflowKind, { title: string; fields: Field[] }> = {
     fields: [
       ['title', 'Meeting title', 'text'],
       ['guest', 'Guest', 'text'],
+      ['guestEmail', 'Guest email for reminders (optional)', 'email'],
       ['host', 'Host', 'text'],
       ['room', 'Room', 'text'],
       ['startAt', 'Start (your local time)', 'datetime-local'],
       ['endAt', 'End (your local time)', 'datetime-local'],
+      ['reminderAt', 'Reminder time (optional)', 'datetime-local'],
     ],
   },
   certifications: {
@@ -134,7 +136,8 @@ export function WorkflowPanel({
     for (const [name, , type] of spec.fields) {
       if (type === 'number') input[name] = Number(input[name])
       if (type === 'datetime-local')
-        input[name] = new Date(String(input[name])).toISOString()
+        input[name] = input[name] ? new Date(String(input[name])).toISOString() : undefined
+      if (input[name] === '') delete input[name]
     }
     const fingerprint = JSON.stringify(input),
       key =
@@ -213,6 +216,20 @@ export function WorkflowPanel({
       setBusy(false)
     }
   }
+  async function runAppointmentReminders() {
+    if (!remote || busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await request<{ queued: number }>('/workflows/appointments/reminders/run', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: '{}' })
+      setNotice(result.queued ? `${result.queued} appointment reminder${result.queued === 1 ? '' : 's'} queued.` : 'No appointment reminders are due.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not queue appointment reminders.')
+    } finally {
+      setBusy(false)
+    }
+  }
   const visible = records.filter(
     (row) =>
       (filter === 'all' || row.status === filter) &&
@@ -241,6 +258,7 @@ export function WorkflowPanel({
           requests. Approval does not change payroll.
         </p>
       )}
+      {kind === 'appointments' && editable && <p><button onClick={() => void runAppointmentReminders()} disabled={busy}>Queue due reminders</button></p>}
       {error && (
         <p className="notice error" role="alert">
           {error}{' '}
@@ -291,7 +309,7 @@ export function WorkflowPanel({
                 <input
                   name={name}
                   type={type}
-                  required={!['rewardAmount', 'rewardNote'].includes(name)}
+                  required={!['rewardAmount', 'rewardNote', 'guestEmail', 'reminderAt'].includes(name)}
                   maxLength={160}
                   min={type === 'number' ? '0.01' : undefined}
                   max={type === 'number' ? '1000000000' : undefined}

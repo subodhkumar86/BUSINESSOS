@@ -107,6 +107,27 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
       setBusy(false)
     }
   }
+  async function onboard(event: React.FormEvent<HTMLFormElement>, candidate: Candidate) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const data = Object.fromEntries(new FormData(form))
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await request('/hr/candidates/' + candidate.id + '/onboard', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': remote!.csrf },
+        body: JSON.stringify({ department: data.department, monthlyCompensation: Number(data.monthlyCompensation) }),
+      })
+      setNotice(candidate.name + ' was added to the employee register.')
+      form.reset()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not onboard candidate.')
+    } finally {
+      setBusy(false)
+    }
+  }
   const visible = candidates.filter(
     (row) =>
       (stage === 'all' || row.status === stage) &&
@@ -118,8 +139,8 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
     <section className="panel" aria-label="Recruitment">
       <h2>Recruitment</h2>
       <p>
-        Track candidates from application to hiring. Create the employee record
-        separately after a hire is confirmed.
+        Track candidates from application to hiring, then add confirmed hires to
+        the employee register with their department and monthly compensation.
       </p>
       {!remote && <p>Sign in to manage your recruitment pipeline.</p>}
       {error && (
@@ -228,6 +249,24 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
                           Reject
                         </button>
                       </>
+                    ) : candidate.status === 'hired' && editable ? (
+                      <details>
+                        <summary>Onboard employee</summary>
+                        <form
+                          className="operations-fields"
+                          onSubmit={(event) => void onboard(event, candidate)}
+                        >
+                          <label>
+                            Department
+                            <input name="department" required maxLength={160} />
+                          </label>
+                          <label>
+                            Monthly compensation
+                            <input name="monthlyCompensation" type="number" min="0" step="0.01" required />
+                          </label>
+                          <button disabled={busy}>Add employee</button>
+                        </form>
+                      </details>
                     ) : (
                       <span>
                         {nextStage[candidate.status] ? 'Read-only' : 'Closed'}

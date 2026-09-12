@@ -1,4 +1,5 @@
-﻿import react from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 
 // Docker Desktop may reserve port 3001 on Windows. Keep the local proxy
@@ -6,7 +7,7 @@ import { defineConfig } from 'vite'
 const apiTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3002'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     host: '127.0.0.1',
     port: 5173,

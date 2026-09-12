@@ -96,7 +96,8 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
           onSubmit={async (e) => {
             e.preventDefault()
             setBusy(true)
-            const data = Object.fromEntries(new FormData(e.currentTarget))
+            const form = e.currentTarget
+            const data = Object.fromEntries(new FormData(form))
             try {
               const created = await request<Budget>('/budgets', {
                 method: 'POST',
@@ -110,7 +111,7 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
                 }),
               })
               setBudgets((prev) => [created, ...prev])
-              e.currentTarget.reset()
+              form.reset()
               setNotice('Budget created.')
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Could not create budget.')

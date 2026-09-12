@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { pdfReport } from '../server/pdf.ts'
 import { chainInput, approvalDecision } from '../server/approvals.ts'
-import { deliveryAdapter, signDelivery } from '../server/notify.ts'
+import { deliveryAdapter, deliverMessage, signDelivery } from '../server/notify.ts'
 import { newMfaSecret, mfaCode, verifyMfaCode } from '../server/mfa.ts'
 import { globalSearch } from '../server/search.ts'
 test('PDF export starts with a valid header and embeds statement values', () => {
@@ -19,6 +19,11 @@ test('approval chains require steps and decisions require a verdict', () => {
 test('delivery adapter exposes provider and signs queued messages', () => {
   assert.ok(deliveryAdapter().provider.length > 0)
   assert.equal(signDelivery('abc').length, 64)
+})
+test('delivery never claims success when no external provider is configured', async () => {
+  const result = await deliverMessage({ id: 'message-1', tenant_id: 'tenant-1', channel: 'email', recipient: 'ops@example.test', subject: '', body: 'Hello', attempts: 0 })
+  assert.equal(result.status, 'failed')
+  assert.match(result.error, /NOTIFY_PROVIDER=webhook/)
 })
 test('MFA codes verify within clock skew and reject forgeries', () => {
   const secret = newMfaSecret()

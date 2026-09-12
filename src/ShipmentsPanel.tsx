@@ -104,6 +104,9 @@ export function ShipmentsPanel({
     }
   }
   if (!remote) return <p>Sign in to manage warehouse shipments.</p>
+  const stageCount = (stage: Shipment['status']) =>
+    rows.filter((row) => row.status === stage).length
+  const inProgress = stageCount('picking') + stageCount('packed')
   const visible = rows.filter(
     (row) =>
       (filter === 'all' || row.status === filter) &&
@@ -113,12 +116,22 @@ export function ShipmentsPanel({
   )
   return (
     <section className="panel">
-      <h2>Shipments</h2>
-      <p>
-        Pick and pack an order, then dispatch to reduce source stock and post
-        cost of goods sold. Stock is checked at dispatch and is not reserved
-        while picking.
-      </p>
+      <div className="section-top">
+        <div>
+          <h2>Shipments</h2>
+          <p>
+            Move an order from picking to dispatch with a traceable stock and
+            cost-of-goods posting.
+          </p>
+        </div>
+        <span className="badge">{inProgress} active</span>
+      </div>
+      <div className="stats-row shipment-stats" aria-label="Shipment summary">
+        <div className="stat-card"><span>Picking</span><strong>{stageCount('picking')}</strong><small>Awaiting pack</small></div>
+        <div className="stat-card"><span>Packed</span><strong>{stageCount('packed')}</strong><small>Ready to dispatch</small></div>
+        <div className="stat-card"><span>Dispatched</span><strong>{stageCount('dispatched')}</strong><small>Posted to inventory</small></div>
+      </div>
+      <p className="muted">Stock is checked only at dispatch; it is not reserved while a shipment is being picked or packed.</p>
       {error && (
         <p role="alert" className="notice error">
           {error}
@@ -148,7 +161,7 @@ export function ShipmentsPanel({
         >
           <label>
             Order reference
-            <input name="orderRef" required maxLength={160} />
+            <input name="orderRef" required maxLength={160} placeholder="e.g. SO-1042" />
           </label>
           <label>
             Customer
@@ -191,7 +204,7 @@ export function ShipmentsPanel({
               required
             />
           </label>
-          <button className="primary" disabled={busy}>
+          <button className="primary" disabled={busy || !remote.state.products.length}>
             Create picking request
           </button>
         </form>
@@ -246,7 +259,7 @@ export function ShipmentsPanel({
                   <td>{row.product_name}</td>
                   <td>{row.quantity}</td>
                   <td>{row.source_location_name || 'Unallocated stock'}</td>
-                  <td>{row.status}</td>
+                  <td><span className={row.status === 'dispatched' ? 'badge green' : row.status === 'cancelled' ? 'badge red' : 'badge'}>{row.status}</span></td>
                   <td>
                     {editable &&
                       (shipmentTransitions[row.status] || []).map((status) => (

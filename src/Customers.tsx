@@ -10,6 +10,7 @@ interface Customer {
   address: string
   tax_reference: string
   status: string
+  marketing_opt_in: boolean
   version: number
 }
 interface Interaction {
@@ -89,7 +90,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
                 occurredAt: new Date(String(values.occurredAt)).toISOString(),
                 followUpOn: values.followUpOn || null,
               }
-            : { ...values, ...(selected ? { version: selected.version } : {}) },
+            : { ...values, marketingOptIn: values.marketingOptIn === 'on', ...(selected ? { version: selected.version } : {}) },
         ),
       })
       if (!interaction) setSelected(null)
@@ -146,6 +147,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
             <th>Email</th>
             <th>Phone</th>
             <th>Status</th>
+            <th>Marketing</th>
             <th>Profile</th>
           </tr>
         </thead>
@@ -162,6 +164,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
                 <td>{customer.email || '—'}</td>
                 <td>{customer.phone || '—'}</td>
                 <td>{customer.status}</td>
+                <td>{customer.marketing_opt_in ? 'Opted in' : 'No consent'}</td>
                 <td>
                   <button
                     disabled={busy}
@@ -249,6 +252,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
                 <option value="inactive">Inactive</option>
               </select>
             </label>
+            <label><input name="marketingOptIn" type="checkbox" defaultChecked={selected?.marketing_opt_in || false} /> Customer has consented to marketing messages</label>
             <button type="submit">Save customer</button>
           </fieldset>
         </form>

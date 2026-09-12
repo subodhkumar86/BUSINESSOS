@@ -41,7 +41,7 @@ function LeadScorePanel({ remote, state }: { remote: import('./types').Snapshot;
   if (!scores.length) return null
   return (
     <section className="card">
-      <div className="section-top"><h2>Lead Scores</h2><small style={{ color: 'var(--text-muted)' }}>Deterministic scoring by stage and deal size</small></div>
+      <div className="section-top"><h2>Lead Scores</h2><small>Deterministic scoring by stage and deal size</small></div>
       <div className="table-scroll">
         <table>
           <thead><tr><th>Opportunity</th><th>Stage</th><th>Score</th><th>Signal</th></tr></thead>
@@ -52,8 +52,8 @@ function LeadScorePanel({ remote, state }: { remote: import('./types').Snapshot;
                 <td>{s.status}</td>
                 <td><b>{s.score}</b>/100</td>
                 <td>
-                  <div style={{ width: 80, height: 6, background: '#eee', borderRadius: 3 }}>
-                    <div style={{ width: s.score + '%', height: '100%', background: s.score >= 70 ? '#27ae60' : s.score >= 40 ? '#f39c12' : '#e74c3c', borderRadius: 3 }} />
+                  <div className="track" style={{ width: 80 }}>
+                    <span style={{ width: s.score + '%', background: s.score >= 70 ? '#4f9b7b' : s.score >= 40 ? '#d4880a' : '#d94040' }} />
                   </div>
                 </td>
               </tr>
@@ -782,7 +782,7 @@ function App({
               / {pages.find((x) => x[0] === current)?.[1] || current}
             </span>
           </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div>
             {!remote ? (
               <div className="role-switcher-wrap" title="Preview the local demo as another role">
                 <span className="role-simulator-badge">DEMO ROLE</span>
@@ -851,9 +851,9 @@ function App({
               </button>
             </div>
           )}
-          <OnboardingWizard remote={remote} onNavigate={navigate} />
           {current === 'dashboard' && (
             <>
+              <OnboardingWizard remote={remote} onNavigate={navigate} />
               <div className="welcome">
                 <div>
                   <span className="badge">YOUR OPERATING PULSE</span>
@@ -998,7 +998,6 @@ function App({
                 </span>
               </div>
             )}
-          {current === 'billing' && remote && <BillingPanel />}
           {current === 'finance' && (!remote || includesFeature(remote.entitlements, 'reports')) && <FinancialStatements state={s} connected={Boolean(remote)} />}
           {remote && titles[page] && !includesFeature(remote.entitlements, pageFeature(page)) && <p className="notice" role="status">Your {remote.entitlements?.plan.replaceAll('_', ' ') || 'current'} plan does not include this workspace. Contact your workspace administrator to review access.</p>}
           {current === 'finance' && (
@@ -1009,6 +1008,20 @@ function App({
                 ['Payables', money(m.payables), 'Received purchase orders'],
                 ['Collected revenue', money(m.revenue), 'Paid invoices'],
               ])}
+              <section className="card finance-action-card">
+                <div>
+                  <span className="eyebrow">Close the daily loop</span>
+                  <h2>Collect, reconcile, then review the ledger.</h2>
+                  <p>
+                    {s.invoices.filter((invoice) => invoice.status === 'Unpaid').length} unpaid customer invoice{s.invoices.filter((invoice) => invoice.status === 'Unpaid').length === 1 ? '' : 's'} and {bankTransactions.filter((transaction) => transaction.match_status === 'suggested').length} suggested bank match{bankTransactions.filter((transaction) => transaction.match_status === 'suggested').length === 1 ? '' : 'es'} need review.
+                  </p>
+                </div>
+                <div className="handoff-steps" aria-label="Finance workflow steps">
+                  <span><b>1</b> Record collection</span>
+                  <span><b>2</b> Approve match</span>
+                  <span><b>3</b> Review statements</span>
+                </div>
+              </section>
               {['owner', 'finance_admin', 'auditor'].includes(effectiveRole) &&
                 section(
                   'Bank accounts',
@@ -1057,7 +1070,8 @@ function App({
                       onSubmit={async (e) => {
                         e.preventDefault()
                         if (!remote) return
-                        const values = Object.fromEntries(new FormData(e.currentTarget))
+                        const form = e.currentTarget
+                        const values = Object.fromEntries(new FormData(form))
                         try {
                           await request('/banks/accounts', {
                             method: 'POST',
@@ -1071,7 +1085,7 @@ function App({
                           })
                           const result = await request<{ accounts: BankAccount[] }>('/banks/accounts')
                           setBankAccounts(result.accounts)
-                          e.currentTarget.reset()
+                          form.reset()
                           setNotice('Bank account added. Transaction feeds remain disconnected.')
                         } catch (error) {
                           setError(error instanceof Error ? error.message : 'Could not add bank account.')
@@ -1163,7 +1177,8 @@ function App({
                         onSubmit={async (event) => {
                           event.preventDefault()
                           if (!remote) return
-                          const file = new FormData(event.currentTarget).get('statement')
+                          const form = event.currentTarget
+                          const file = new FormData(form).get('statement')
                           if (!(file instanceof File) || !file.size) {
                             setError('Choose a CSV statement file to import.')
                             return
@@ -1204,7 +1219,7 @@ function App({
                               `/banks/accounts/${activeBankAccount.id}/transactions`,
                             )
                             setBankTransactions(refreshed.transactions)
-                            event.currentTarget.reset()
+                            form.reset()
                             setNotice(`${result.imported} statement lines imported; ${result.skipped} duplicates skipped; ${result.suggested} suggested matches.`)
                           } catch (error) {
                             setError(error instanceof Error ? error.message : 'Could not import the statement.')
@@ -1220,7 +1235,8 @@ function App({
                       onSubmit={async (event) => {
                         event.preventDefault()
                         if (!remote) return
-                        const values = Object.fromEntries(new FormData(event.currentTarget))
+                        const form = event.currentTarget
+                        const values = Object.fromEntries(new FormData(form))
                         try {
                           const created = await request<BankTransaction>(`/banks/accounts/${activeBankAccount.id}/transactions`, {
                             method: 'POST',
@@ -1234,7 +1250,7 @@ function App({
                             }),
                           })
                           setBankTransactions((items) => [created, ...items])
-                          event.currentTarget.reset()
+                          form.reset()
                           setNotice('Bank transaction added as unmatched.')
                         } catch (error) {
                           setError(error instanceof Error ? error.message : 'Could not add bank transaction.')
@@ -1365,7 +1381,8 @@ function App({
                     onSubmit={async (e) => {
                       e.preventDefault()
                       if (!remote) return
-                      const values = Object.fromEntries(new FormData(e.currentTarget))
+                      const form = e.currentTarget
+                      const values = Object.fromEntries(new FormData(form))
                       try {
                         await request('/banks/accounts', {
                           method: 'POST',
@@ -1379,7 +1396,7 @@ function App({
                         })
                         const result = await request<{ accounts: BankAccount[] }>('/banks/accounts')
                         setBankAccounts(result.accounts)
-                        e.currentTarget.reset()
+                        form.reset()
                         setNotice('Bank account connected successfully.')
                       } catch (error) {
                         setError(error instanceof Error ? error.message : 'Could not add bank account.')
@@ -1611,7 +1628,8 @@ function App({
                       onSubmit={async (event) => {
                         event.preventDefault()
                         if (!remote) return
-                        const values = Object.fromEntries(new FormData(event.currentTarget))
+                        const form = event.currentTarget
+                        const values = Object.fromEntries(new FormData(form))
                         try {
                           const created = await request<BankTransaction>(`/banks/accounts/${activeBankAccount.id}/transactions`, {
                             method: 'POST',
@@ -1625,7 +1643,7 @@ function App({
                             }),
                           })
                           setBankTransactions((items) => [created, ...items])
-                          event.currentTarget.reset()
+                          form.reset()
                           setNotice('Bank statement entry recorded.')
                         } catch (error) {
                           setError(error instanceof Error ? error.message : 'Could not add bank transaction.')
@@ -1684,6 +1702,18 @@ function App({
                   'Closed successfully',
                 ],
               ])}
+              <section className="card revenue-handoff">
+                <div>
+                  <span className="eyebrow">Revenue handoff</span>
+                  <h2>Close the loop without losing the trail.</h2>
+                  <p>When an opportunity is won, create the customer invoice in Finance. Once goods are ready, use the same order reference in Warehouse to keep fulfilment traceable.</p>
+                </div>
+                <div className="handoff-steps" aria-label="Revenue handoff steps">
+                  <span><b>1</b> Mark won</span>
+                  <span><b>2</b> Invoice customer</span>
+                  <span><b>3</b> Ship order</span>
+                </div>
+              </section>
               {section(
                 'Opportunities',
                 table(

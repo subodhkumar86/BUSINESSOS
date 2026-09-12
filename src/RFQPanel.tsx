@@ -118,7 +118,8 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
           onSubmit={async (e) => {
             e.preventDefault()
             setBusy(true)
-            const data = Object.fromEntries(new FormData(e.currentTarget))
+            const form = e.currentTarget
+            const data = Object.fromEntries(new FormData(form))
             try {
               const created = await request<RFQ>('/rfq', {
                 method: 'POST',
@@ -132,7 +133,7 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
                 }),
               })
               setRfqs((prev) => [created, ...prev])
-              e.currentTarget.reset()
+              form.reset()
               setNotice('RFQ created and sent.')
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Could not create RFQ.')

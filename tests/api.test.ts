@@ -272,6 +272,12 @@ try {
     const bookings=await Promise.all([create('appointments',appointment),create('appointments',{...appointment,room:'boardroom'})])
     assert.deepEqual(bookings.map(r=>r.status).sort(),[201,409])
     assert.equal((await create('appointments',{...appointment,startAt:'2026-11-01T10:00:00Z',endAt:'2026-11-01T11:00:00Z'})).status,201)
+    const reminder = await create('appointments', { ...appointment, title: 'Reminder visit', room: 'Reminder room', guestEmail: 'guest@example.test', startAt: '2026-11-02T09:00:00Z', endAt: '2026-11-02T10:00:00Z', reminderAt: '2020-01-01T08:00:00Z' })
+    assert.equal(reminder.status, 201)
+    assert.equal((await call('/workflows/appointments/reminders/run', 'POST', {}, account)).data.queued, 1)
+    assert.equal((await call('/workflows/appointments/reminders/run', 'POST', {}, account)).data.queued, 0)
+    const reminderOutbox = await call('/notifications/outbox', 'GET', undefined, account)
+    assert.ok(reminderOutbox.data.messages.some((row: { recipient: string }) => row.recipient === 'guest@example.test'))
     const goal=await create('goals',{employeeId,title:'Orders shipped',target:10,unit:'orders',dueDate:'2026-12-01'})
     assert.equal(goal.status,201)
     assert.equal((await call('/workflows/goals/'+goal.data.id,'PATCH',{version:1,status:'completed'},hr)).status,409)
@@ -289,6 +295,13 @@ try {
     assert.equal((await call(articlePath,'GET',undefined,staff)).status,404)
     assert.equal((await call(articlePath,'PATCH',{version:1,status:'published'},account)).status,200)
     assert.equal((await call(articlePath,'GET',undefined,staff)).status,200)
+    const portalSlug = (await app.store.pool.query('SELECT slug FROM support_portals WHERE tenant_id=(SELECT tenant_id FROM users WHERE id=$1)', [account.snapshot.user.id])).rows[0].slug
+    const publicList = await fetch(base + '/public/support/' + portalSlug)
+    assert.equal(publicList.status, 200)
+    assert.equal((await publicList.json()).articles.some((row: { id: string; content?: string }) => row.id === article.data.id && row.content === undefined), true)
+    const publicArticle = await fetch(base + '/public/support/' + portalSlug + '/articles/' + article.data.id)
+    assert.equal((await publicArticle.json()).articles[0].content, 'Contact the support team with your order reference.')
+    assert.equal((await fetch(base + '/public/support/' + '0'.repeat(32))).status, 404)
     assert.equal((await call(articlePath,'PATCH',{version:2,status:'archived'},account)).status,200)
     assert.equal((await call(articlePath,'GET',undefined,staff)).status,404)
     const logs=await call('/audit-logs','GET',undefined,account)
@@ -296,7 +309,7 @@ try {
     assert.equal((await call('/workflows/findings','GET',undefined,auditor)).status,200)
   })
 
-  await test('recruitment isolates tenants, rejects stale and skipped stages, and audits changes', async () => {
+  await test('recruitment isolates tenants, rejects stale and skipped stages, onboards hires, and audits changes', async () => {
     const created = await call('/hr/candidates','POST',{name:'Candidate',email:'candidate@example.test',position:'Engineer'},owner)
     assert.equal(created.status,201)
     const path='/hr/candidates/'+created.data.id
@@ -307,9 +320,21 @@ try {
     assert.equal((await call(path,'PATCH',{version:1,status:'screening'},owner)).status,200)
     assert.equal((await call(path,'PATCH',{version:1,status:'interview'},owner)).status,409)
     assert.equal((await call(path,'PATCH',{version:2,status:'interview'},owner)).status,200)
+    assert.equal((await call(path,'PATCH',{version:3,status:'offer'},owner)).status,200)
+    assert.equal((await call(path,'PATCH',{version:4,status:'hired'},owner)).status,200)
+    const onboardPath=path+'/onboard'
+    assert.equal((await call(onboardPath,'POST',{department:'Engineering',monthlyCompensation:180000},other)).status,404)
+    const onboarded=await call(onboardPath,'POST',{department:'Engineering',monthlyCompensation:180000},owner)
+    assert.equal(onboarded.status,201)
+    assert.equal(onboarded.data.employee.name,'Candidate')
+    assert.equal((await call(onboardPath,'POST',{department:'Engineering',monthlyCompensation:180000},owner)).status,409)
+    const workspace=await call('/workspace','GET',undefined,owner)
+    assert.ok(workspace.data.state.employees.some((row:any)=>row.id===onboarded.data.employee.id && row.amount===180000))
+    owner.snapshot=workspace.data
     assert.equal((await call('/hr/candidates','POST',{name:'Forged',email:'candidate@example.test',position:'Engineer',tenantId:randomUUID()},owner)).status,400)
     const logs=await call('/audit-logs','GET',undefined,owner)
     assert.ok(logs.data.entries.some((row:any)=>JSON.stringify(row).includes('candidate_stage_updated')))
+    assert.ok(logs.data.entries.some((row:any)=>JSON.stringify(row).includes('candidate_onboarded')))
   })
   await test('customer profiles and history enforce tenant boundaries, versions, validation and audit', async () => {
     const a=owner, b=other
@@ -333,6 +358,25 @@ try {
     const tenant=(await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1',[a.snapshot.user.id])).rows[0].tenant_id
     await app.store.tenant(tenant,async c=>{
       assert.equal((await c.query('SELECT count(*)::int AS n FROM customers')).rows[0].n,1)
+    })
+  })
+  await test('campaign queue sends only opted-in tenant contacts and cannot queue a recipient twice', async () => {
+    const optedIn = await call('/crm/customers', 'POST', { name: 'Consent customer', email: 'consent@example.test', marketingOptIn: true }, owner)
+    const noConsent = await call('/crm/customers', 'POST', { name: 'No consent customer', email: 'no-consent@example.test', marketingOptIn: false }, owner)
+    assert.equal(optedIn.status, 201)
+    assert.equal(noConsent.status, 201)
+    const campaign = await call('/marketing/campaigns', 'POST', { name: 'September update', channel: 'email' }, owner)
+    assert.equal(campaign.status, 201)
+    const path = '/marketing/campaigns/' + campaign.data.id + '/queue'
+    const first = await call(path, 'POST', { subject: 'Business update', body: 'Thank you for your consent.' }, owner)
+    assert.equal(first.status, 201)
+    assert.equal(first.data.queued, 1)
+    assert.equal((await call(path, 'POST', { subject: 'Business update', body: 'Thank you for your consent.' }, owner)).data.queued, 0)
+    assert.equal((await call(path, 'POST', { subject: 'x', body: 'x' }, other)).status, 404)
+    const tenant = (await app.store.pool.query('SELECT tenant_id FROM users WHERE id=$1', [owner.snapshot.user.id])).rows[0].tenant_id
+    await app.store.tenant(tenant, async c => {
+      assert.equal((await c.query('SELECT count(*)::int AS n FROM campaign_deliveries WHERE campaign_id=$1', [campaign.data.id])).rows[0].n, 1)
+      assert.equal((await c.query("SELECT count(*)::int AS n FROM message_outbox WHERE recipient='consent@example.test'")).rows[0].n, 1)
     })
   })
   await test('financial statement API validates calendar periods and rejects unsupported parameters',async()=>{
@@ -1413,6 +1457,18 @@ try {
       200,
     )
   })
+  await test('support feedback requires resolution, is unique per ticket, and reports tenant metrics', async () => {
+    const ticket = await call('/support/tickets', 'POST', { subject: 'Feedback ticket', customer: 'Customer', priority: 'medium' }, owner)
+    assert.equal(ticket.status, 201)
+    const path = '/support/tickets/' + ticket.data.id + '/feedback'
+    assert.equal((await call(path, 'POST', { csat: 5, nps: 10, comment: 'Great' }, owner)).status, 409)
+    assert.equal((await call('/support/tickets/' + ticket.data.id, 'PATCH', { status: 'resolved' }, owner)).status, 200)
+    assert.equal((await call(path, 'POST', { csat: 5, nps: 10, comment: 'Great' }, owner)).status, 201)
+    assert.equal((await call(path, 'POST', { csat: 5, nps: 10 }, owner)).status, 409)
+    const metrics = await call('/support/feedback/metrics', 'GET', undefined, owner)
+    assert.equal(Number(metrics.data.metrics.csat) >= 5, true)
+    assert.equal(Number(metrics.data.metrics.nps_score) >= 100, true)
+  })
 
   await test('warehouse locations and suppliers enforce tenant-scoped operations', async () => {
     const location = await call(
@@ -1667,7 +1723,9 @@ try {
     const queued = await call('/notifications/outbox', 'POST', { channel: 'email', recipient: 'ops@example.test', subject: 'Hi', body: 'Hello' }, a)
     assert.equal(queued.status, 201)
     assert.equal((await call('/notifications/outbox', 'GET', undefined, a)).data.messages.length >= 1, true)
-    assert.equal((await call('/notifications/outbox/' + queued.data.id + '/deliver', 'POST', {}, a)).data.status, 'sent')
+    const delivery = await call('/notifications/outbox/' + queued.data.id + '/deliver', 'POST', {}, a)
+    assert.equal(delivery.data.status, 'failed')
+    assert.match(delivery.data.error, /NOTIFY_PROVIDER=webhook/)
     const audit = await call('/audit-logs', 'GET', undefined, a)
     assert.ok(audit.data.entries.some((r: { action: string }) => r.action === 'approval_requested'))
   })

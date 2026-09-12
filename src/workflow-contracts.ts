@@ -60,16 +60,20 @@ export const workflowSchemas = {
     .object({
       title: text,
       guest: text,
+      guestEmail: z.string().trim().email().max(320).optional(),
       host: text,
       room: text,
       startAt: timestamp,
       endAt: timestamp,
+      reminderAt: timestamp.optional(),
     })
     .strict()
     .refine(
       (v) => Date.parse(v.startAt) < Date.parse(v.endAt),
       'Appointment end must follow start.',
-    ),
+    )
+    .refine((v) => !v.reminderAt || Boolean(v.guestEmail), 'A reminder needs a guest email address.')
+    .refine((v) => !v.reminderAt || Date.parse(v.reminderAt) < Date.parse(v.startAt), 'Reminder time must be before the appointment.'),
   certifications: z
     .object({ title: text, issuer: text, reference: text, expiresOn: day })
     .strict(),

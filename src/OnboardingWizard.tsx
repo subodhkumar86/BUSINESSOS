@@ -3,12 +3,12 @@ import { request } from './api'
 import type { Snapshot } from './types'
 
 const STEPS = [
-  { id: 'profile', label: 'Set your business name', detail: 'Go to Settings and save your organisation name.' },
-  { id: 'employee', label: 'Add your first employee', detail: 'Open HR & Payroll and add an employee record.' },
-  { id: 'product', label: 'Add a product or service', detail: 'Open Inventory & Stock and add your first SKU.' },
-  { id: 'invoice', label: 'Create your first invoice', detail: 'Open Finance & AR/AP and create a customer invoice.' },
-  { id: 'bank', label: 'Connect a bank account', detail: 'Open Banking & Feeds and add a bank account.' },
-  { id: 'team', label: 'Invite a team member', detail: 'Open Settings → Team and create a user account.' },
+  { id: 'profile', page: 'settings', label: 'Set your business name', detail: 'Go to Settings and save your organisation name.' },
+  { id: 'employee', page: 'hr', label: 'Add your first employee', detail: 'Open HR & Payroll and add an employee record.' },
+  { id: 'product', page: 'inventory', label: 'Add a product or service', detail: 'Open Inventory & Stock and add your first SKU.' },
+  { id: 'invoice', page: 'finance', label: 'Create your first invoice', detail: 'Open Finance & AR/AP and create a customer invoice.' },
+  { id: 'bank', page: 'banking', label: 'Connect a bank account', detail: 'Open Banking & Feeds and add a bank account.' },
+  { id: 'team', page: 'settings', label: 'Invite a team member', detail: 'Open Settings and create a user account.' },
 ]
 
 interface OnboardingState {
@@ -16,7 +16,13 @@ interface OnboardingState {
   dismissed: boolean
 }
 
-export function OnboardingWizard({ remote, onNavigate }: { remote: Snapshot | null; onNavigate: (page: string) => void }) {
+export function OnboardingWizard({
+  remote,
+  onNavigate,
+}: {
+  remote: Snapshot | null
+  onNavigate: (page: string) => void
+}) {
   const [state, setState] = useState<OnboardingState | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -26,10 +32,10 @@ export function OnboardingWizard({ remote, onNavigate }: { remote: Snapshot | nu
   }, [remote])
 
   if (!remote || remote.user.role !== 'owner' || !state || state.dismissed) return null
-  const remaining = STEPS.filter((s) => !state.completedSteps.includes(s.id))
+  const remaining = STEPS.filter((step) => !state.completedSteps.includes(step.id))
   if (!remaining.length) return null
 
-  const complete = async (stepId: string) => {
+  async function complete(stepId: string) {
     if (!remote || busy) return
     setBusy(true)
     try {
@@ -38,13 +44,17 @@ export function OnboardingWizard({ remote, onNavigate }: { remote: Snapshot | nu
         headers: { 'X-CSRF-Token': remote.csrf },
         body: JSON.stringify({ completedStep: stepId }),
       })
-      setState((prev) => prev ? { ...prev, completedSteps: [...prev.completedSteps, stepId] } : prev)
+      setState((previous) =>
+        previous
+          ? { ...previous, completedSteps: [...previous.completedSteps, stepId] }
+          : previous,
+      )
     } finally {
       setBusy(false)
     }
   }
 
-  const dismiss = async () => {
+  async function dismiss() {
     if (!remote || busy) return
     setBusy(true)
     try {
@@ -53,42 +63,67 @@ export function OnboardingWizard({ remote, onNavigate }: { remote: Snapshot | nu
         headers: { 'X-CSRF-Token': remote.csrf },
         body: JSON.stringify({ dismissed: true }),
       })
-      setState((prev) => prev ? { ...prev, dismissed: true } : prev)
+      setState((previous) => (previous ? { ...previous, dismissed: true } : previous))
     } finally {
       setBusy(false)
     }
   }
 
-  const done = STEPS.length - remaining.length
-  const pct = Math.round((done / STEPS.length) * 100)
+  const completed = STEPS.length - remaining.length
+  const progress = Math.round((completed / STEPS.length) * 100)
 
   return (
-    <div className="card" style={{ borderLeft: '4px solid #6965dc', marginBottom: 16 }}>
-      <div className="section-top">
+    <section className="card onboarding-card" aria-label="Workspace onboarding">
+      <div className="section-top onboarding-header">
         <div>
-          <h2 style={{ margin: 0 }}>🚀 Get started with BusinessOS</h2>
-          <small style={{ color: 'var(--text-muted)' }}>{done} of {STEPS.length} steps complete</small>
+          <h2>Get started with BusinessOS</h2>
+          <small>{completed} of {STEPS.length} steps complete</small>
         </div>
-        <button onClick={dismiss} disabled={busy} aria-label="Dismiss onboarding">×</button>
+        <button
+          className="onboarding-dismiss"
+          onClick={dismiss}
+          disabled={busy}
+          aria-label="Dismiss onboarding"
+        >
+          ×
+        </button>
       </div>
-      <div style={{ height: 6, background: '#eee', borderRadius: 3, margin: '8px 0 16px' }}>
-        <div style={{ width: pct + '%', height: '100%', background: '#6965dc', borderRadius: 3, transition: 'width 0.3s' }} />
+      <div
+        className="onboarding-progress"
+        role="progressbar"
+        aria-label="Onboarding progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+      >
+        <div style={{ width: progress + '%' }} />
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="onboarding-steps">
         {STEPS.map((step) => {
-          const done = state.completedSteps.includes(step.id)
+          const isComplete = state.completedSteps.includes(step.id)
+          const stepClass = isComplete
+            ? 'onboarding-step is-done'
+            : 'onboarding-step'
           return (
-            <div key={step.id} style={{ display: 'flex', alignItems: 'center', gap: 12, opacity: done ? 0.5 : 1 }}>
-              <span style={{ fontSize: 18, minWidth: 24 }}>{done ? '✅' : '⬜'}</span>
-              <div style={{ flex: 1 }}>
-                <b style={{ textDecoration: done ? 'line-through' : 'none' }}>{step.label}</b>
-                {!done && <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-muted)' }}>{step.detail}</p>}
-              </div>
-              {!done && (
+            <div key={step.id} className={stepClass}>
+              <span className="onboarding-check" aria-hidden="true">
+                {isComplete ? 'Done' : 'To do'}
+              </span>
+              <div className="onboarding-copy">
                 <button
+                  className="onboarding-link"
+                  type="button"
+                  onClick={() => onNavigate(step.page)}
+                >
+                  {step.label}
+                </button>
+                {!isComplete && <p>{step.detail}</p>}
+              </div>
+              {!isComplete && (
+                <button
+                  className="onboarding-action"
                   disabled={busy}
-                  onClick={() => complete(step.id)}
-                  style={{ fontSize: '0.8rem' }}
+                  onClick={() => void complete(step.id)}
                 >
                   Mark done
                 </button>
@@ -97,6 +132,6 @@ export function OnboardingWizard({ remote, onNavigate }: { remote: Snapshot | nu
           )
         })}
       </div>
-    </div>
+    </section>
   )
 }

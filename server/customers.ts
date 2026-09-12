@@ -11,6 +11,7 @@ export const customerInput = z
     address: z.string().trim().max(1000).default(''),
     taxReference: short.default(''),
     status: z.enum(['active', 'inactive']).default('active'),
+    marketingOptIn: z.boolean().default(false),
   })
   .strict()
 export const customerUpdate = customerInput.extend({

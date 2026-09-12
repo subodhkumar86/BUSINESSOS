@@ -1,7 +1,7 @@
 import { globalSearch } from './search.ts'
 import { scoreLead } from './lead-scoring.ts'
 import { newMfaSecret, verifyMfaCode, mfaCode } from './mfa.ts'
-import { queueMessage, signDelivery } from './notify.ts'
+import { queueMessage, signDelivery, deliveryAdapter, deliverMessage } from './notify.ts'
 import { pdfReport } from './pdf.ts'
 import { chainInput, chainUpdate, approvalDecision, seedDefaultChains, matchingChain } from './approvals.ts'
 import { handleReturns } from './returns.ts'
@@ -500,6 +500,15 @@ export async function createApp(config: {
           sessions: 'redis',
         })
       }
+      const publicSupport = path.match(/^\/api\/v1\/public\/support\/([a-f0-9]{32})(?:\/articles\/([0-9a-f-]+))?$/i)
+      if (req.method === 'GET' && publicSupport) {
+        const portal = (await store.pool.query('SELECT tenant_id FROM support_portals WHERE slug=$1', [publicSupport[1].toLowerCase()])).rows[0]
+        if (!portal) return send(res, 404, { error: 'Support portal not found.' })
+        const articleId = publicSupport[2] ? z.uuid().parse(publicSupport[2]) : null
+        const articles = await store.tenant(portal.tenant_id, async c => (await c.query("SELECT id,data->>'title' AS title,data->>'category' AS category,data->>'content' AS content,updated_at FROM workflow_records WHERE tenant_id=$1 AND kind='knowledge' AND status='published' AND ($2::uuid IS NULL OR id=$2) ORDER BY updated_at DESC,id", [portal.tenant_id, articleId])).rows)
+        if (articleId && !articles.length) return send(res, 404, { error: 'Article not found.' })
+        return send(res, 200, { articles: articles.map(row => ({ ...row, content: articleId ? row.content : undefined })) })
+      }
       if (req.method === 'GET' && (await sendStatic(res, path))) return
       const mutation = !['GET', 'HEAD'].includes(req.method || '')
       if (mutation && !(req.method === 'POST' && /^\/api\/v1\/webhooks\/banks\/[a-z0-9_-]+$/i.test(path)) && !config.origins.includes(req.headers.origin || ''))
@@ -559,6 +568,7 @@ export async function createApp(config: {
               tenant,
               { ...state, stockMovements: [] },
             ])
+            await c.query('INSERT INTO support_portals(tenant_id,slug) VALUES($1,$2)', [tenant, randomUUID().replaceAll('-', '')])
             await c.query(
               'INSERT INTO users(id,tenant_id,email,name,password,role) VALUES($1,$2,$3,$4,$5,$6)',
               [user.id, tenant, b.email, b.name, passwordHash, 'owner'],
@@ -897,7 +907,7 @@ export async function createApp(config: {
           }
           if (!write) {
             if (history) return {interactions:(await c.query('SELECT i.id,i.kind,i.summary,i.occurred_at,i.follow_up_on,i.created_at,u.name AS actor FROM customer_interactions i JOIN users u ON u.id=i.actor_id WHERE i.tenant_id=$1 AND i.customer_id=$2 ORDER BY i.occurred_at DESC,i.id',[s.tenant,customerId])).rows}
-            return {customers:(await c.query('SELECT id,name,email,phone,address,tax_reference,status,version,created_at,updated_at FROM customers WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY name,id',[s.tenant,customerId || null])).rows}
+            return {customers:(await c.query('SELECT id,name,email,phone,address,tax_reference,status,marketing_opt_in,version,created_at,updated_at FROM customers WHERE tenant_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY name,id',[s.tenant,customerId || null])).rows}
           }
           const id = customerId || randomUUID()
           if (history) {
@@ -905,11 +915,11 @@ export async function createApp(config: {
             await c.query('INSERT INTO customer_interactions(id,tenant_id,customer_id,kind,summary,occurred_at,follow_up_on,actor_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[randomUUID(),s.tenant,id,b.kind,b.summary,b.occurredAt,b.followUpOn,s.user.id])
           } else if (req.method === 'PATCH') {
             const b = customerUpdate.parse(input)
-            const updated = await c.query('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4,tax_reference=$5,status=$6,version=version+1,updated_at=now() WHERE tenant_id=$7 AND id=$8 AND version=$9',[b.name,b.email,b.phone,b.address,b.taxReference,b.status,s.tenant,id,b.version])
+            const updated = await c.query('UPDATE customers SET name=$1,email=$2,phone=$3,address=$4,tax_reference=$5,status=$6,marketing_opt_in=$7,version=version+1,updated_at=now() WHERE tenant_id=$8 AND id=$9 AND version=$10',[b.name,b.email,b.phone,b.address,b.taxReference,b.status,b.marketingOptIn,s.tenant,id,b.version])
             if (!updated.rowCount) fail(409,'Customer changed. Refresh the profile before saving again.')
           } else {
             const b = customerInput.parse(input)
-            await c.query('INSERT INTO customers(id,tenant_id,name,email,phone,address,tax_reference,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[id,s.tenant,b.name,b.email,b.phone,b.address,b.taxReference,b.status])
+            await c.query('INSERT INTO customers(id,tenant_id,name,email,phone,address,tax_reference,status,marketing_opt_in) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,s.tenant,b.name,b.email,b.phone,b.address,b.taxReference,b.status,b.marketingOptIn])
           }
           await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:history?'customer_interaction_logged':req.method==='PATCH'?'customer_updated':'customer_created',entity:id,detail:history?'Customer interaction recorded':'Customer profile saved'})
           return {id}
@@ -2103,6 +2113,20 @@ export async function createApp(config: {
         })
         return send(res, 200, { ok: true })
       }
+      if (path === '/api/v1/support/feedback/metrics') {
+        if (req.method !== 'GET') fail(405, 'Method not supported.')
+        if (!canReadModule(s.user.role, 'support')) fail(403, 'Your role cannot view support feedback.')
+        return send(res, 200, await store.tenant(s.tenant, async c => ({ metrics: (await c.query("SELECT count(*)::int AS responses,coalesce(round(avg(csat)::numeric,2),0) AS csat,coalesce(round(avg(nps)::numeric,2),0) AS nps,coalesce(round(((count(*) FILTER (WHERE nps>=9)-count(*) FILTER (WHERE nps<=6))::numeric/nullif(count(*),0))*100,2),0) AS nps_score FROM support_feedback WHERE tenant_id=$1", [s.tenant])).rows[0] })))
+      }
+      const feedbackRoute = path.match(/^\/api\/v1\/support\/tickets\/([0-9a-f-]+)\/feedback$/i)
+      if (feedbackRoute) {
+        if (!['POST','GET'].includes(req.method || '')) fail(405, 'Method not supported.')
+        const ticketId = z.uuid().parse(feedbackRoute[1])
+        if (req.method === 'GET') return send(res, 200, await store.tenant(s.tenant, async c => ({ feedback: (await c.query('SELECT csat,nps,comment,created_at FROM support_feedback WHERE tenant_id=$1 AND ticket_id=$2',[s.tenant,ticketId])).rows[0] || null })))
+        if (!canWriteModule(s.user.role, 'support')) fail(403, 'Your role cannot record support feedback.')
+        const input = z.object({ csat:z.number().int().min(1).max(5), nps:z.number().int().min(0).max(10), comment:z.string().trim().max(2000).default('') }).strict().parse(await body(req))
+        return send(res, 201, await store.tenant(s.tenant, async c => { const ticket=(await c.query('SELECT status FROM support_tickets WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[s.tenant,ticketId])).rows[0]; if(!ticket) fail(404,'Support ticket not found.'); if(!['resolved','closed'].includes(ticket.status)) fail(409,'Feedback is available after resolution.'); const row=(await c.query('INSERT INTO support_feedback(id,tenant_id,ticket_id,csat,nps,comment) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant_id,ticket_id) DO NOTHING RETURNING *',[randomUUID(),s.tenant,ticketId,input.csat,input.nps,input.comment])).rows[0]; if(!row) fail(409,'Feedback was already recorded.'); await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'support_feedback_recorded',entity:ticketId,detail:`csat=${input.csat},nps=${input.nps}`}); return {feedback:row} }))
+      }
       const ticketRoute = path.match(
         /^\/api\/v1\/support\/tickets(?:\/([0-9a-f-]+))?$/i,
       )
@@ -2743,6 +2767,31 @@ export async function createApp(config: {
       }
 
       // 5. Marketing Campaigns & ROI (Module 6)
+      const campaignQueueRoute = path.match(/^\/api\/v1\/marketing\/campaigns\/([0-9a-f-]+)\/queue$/i)
+      if (campaignQueueRoute) {
+        if (req.method !== 'POST') fail(405, 'Method not supported.')
+        if (!['owner', 'sales_crm_user'].includes(s.user.role)) fail(403, 'Your role cannot execute campaigns.')
+        const campaignId = z.uuid().parse(campaignQueueRoute[1])
+        const input = z.object({ subject: z.string().trim().min(1).max(200), body: z.string().trim().min(1).max(8000) }).strict().parse(await body(req))
+        const result = await store.tenant(s.tenant, async (c) => {
+          await ensureCurrent(c, s)
+          const campaign = (await c.query('SELECT id,name,status FROM marketing_campaigns WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, campaignId])).rows[0]
+          if (!campaign) fail(404, 'Campaign not found.')
+          if (!['planning', 'active'].includes(campaign.status)) fail(409, 'Only planning or active campaigns can be queued.')
+          const contacts = (await c.query("SELECT id,email FROM customers WHERE tenant_id=$1 AND status='active' AND marketing_opt_in=true AND email<>'' ORDER BY id FOR SHARE", [s.tenant])).rows
+          let queued = 0
+          for (const contact of contacts) {
+            const exists = await c.query('SELECT 1 FROM campaign_deliveries WHERE tenant_id=$1 AND campaign_id=$2 AND customer_id=$3', [s.tenant, campaignId, contact.id])
+            if (exists.rowCount) continue
+            const outboxId = await queueMessage(c, s.tenant, { channel: 'email', recipient: contact.email, subject: input.subject, body: input.body })
+            await c.query('INSERT INTO campaign_deliveries(id,tenant_id,campaign_id,customer_id,outbox_id) VALUES($1,$2,$3,$4,$5)', [randomUUID(), s.tenant, campaignId, contact.id, outboxId])
+            queued++
+          }
+          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'marketing_campaign_queued', entity: campaignId, detail: `${queued} opted-in recipients` })
+          return { queued, skipped: contacts.length - queued }
+        })
+        return send(res, 201, result)
+      }
       const campaignRoute = path.match(/^\/api\/v1\/marketing\/campaigns(?:\/([0-9a-f-]+))?$/i)
       if (campaignRoute) {
         if (!["owner","sales_crm_user"].includes(s.user.role) && !(req.method === 'GET' && s.user.role === 'auditor')) fail(403, 'Your role cannot access this workflow.')
@@ -2999,6 +3048,22 @@ export async function createApp(config: {
         fail(405, 'Method not supported.')
       }
 
+      const appointmentReminderRoute = path.match(/^\/api\/v1\/workflows\/appointments\/reminders\/run$/i)
+      if (appointmentReminderRoute) {
+        if (req.method !== 'POST') fail(405, 'Method not supported.')
+        if (!['owner', 'sales_crm_user'].includes(s.user.role)) fail(403, 'Only front-office users can queue appointment reminders.')
+        const result = await store.tenant(s.tenant, async (c) => {
+          await ensureCurrent(c, s)
+          const due = (await c.query("SELECT * FROM workflow_records WHERE tenant_id=$1 AND kind='appointments' AND status='scheduled' AND data ? 'guestEmail' AND data ? 'reminderAt' AND NOT (data ? 'reminderQueuedAt') AND (data->>'reminderAt')::timestamptz <= now() FOR UPDATE", [s.tenant])).rows
+          for (const appointment of due) {
+            await queueMessage(c, s.tenant, { channel: 'email', recipient: appointment.data.guestEmail, subject: `Reminder: ${appointment.data.title}`, body: `Reminder: ${appointment.data.title} is scheduled for ${appointment.data.startAt}.` })
+            await c.query("UPDATE workflow_records SET data=jsonb_set(data,'{reminderQueuedAt}',to_jsonb(now()::text),true),version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2", [s.tenant, appointment.id])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'appointment_reminder_queued', entity: appointment.id, detail: appointment.data.guestEmail })
+          }
+          return { queued: due.length }
+        })
+        return send(res, 200, result)
+      }
       const workflowRoute = new RegExp('^/api/v1/workflows/([a-z]+)(?:/([0-9a-f-]+))?$','i').exec(path)
       if (workflowRoute) {
         const result = await handleWorkflow({store,session:s,method:req.method || 'GET',kind:workflowRoute[1],id:workflowRoute[2],input:mutation?await body(req):undefined,requestKey:req.headers['idempotency-key'] as string|undefined,ensureCurrent,fail})
@@ -3116,6 +3181,26 @@ export async function createApp(config: {
       }
       const candidateRoute = path.match(/^\/api\/v1\/hr\/candidates(?:\/([0-9a-f-]+))?$/i)
       const interviewRoute = path.match(/^\/api\/v1\/hr\/candidates\/([0-9a-f-]+)\/interviews$/i)
+      const hireRoute = path.match(/^\/api\/v1\/hr\/candidates\/([0-9a-f-]+)\/onboard$/i)
+      if (hireRoute) {
+        if (req.method !== 'POST') fail(405, 'Method not supported.')
+        if (!['owner', 'hr_admin'].includes(s.user.role)) fail(403, 'Only HR can onboard a hired candidate.')
+        const candidateId = z.uuid().parse(hireRoute[1])
+        const input = z.object({ department: z.string().trim().min(1).max(160), monthlyCompensation: z.number().finite().nonnegative().max(1e9) }).strict().parse(await body(req))
+        const result = await store.tenant(s.tenant, async c => {
+          const candidate = (await c.query('SELECT * FROM recruitment_candidates WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, candidateId])).rows[0]
+          if (!candidate) fail(404, 'Candidate not found.')
+          if (candidate.status !== 'hired') fail(409, 'Only hired candidates can be onboarded.')
+          const current = await store.read(c, s.tenant, true)
+          const existing = current.state.employees.find(employee => employee.name.toLowerCase() === candidate.name.toLowerCase())
+          if (existing) fail(409, 'An employee record already exists for this candidate.')
+          const employee = { id: randomUUID(), name: candidate.name, department: input.department, amount: input.monthlyCompensation }
+          await c.query('UPDATE tenants SET state=$1,version=version+1 WHERE id=$2', [{ ...current.state, employees: [...current.state.employees, employee] }, s.tenant])
+          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'candidate_onboarded', entity: candidateId, detail: employee.id })
+          return { employee }
+        })
+        return send(res, 201, result)
+      }
       if (interviewRoute) {
         if (!['owner', 'hr_admin', 'auditor'].includes(s.user.role)) fail(403, 'Your role cannot access recruitment.')
         const candidateId = z.uuid().parse(interviewRoute[1])
@@ -3309,21 +3394,22 @@ export async function createApp(config: {
             await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'notification_queued', entity: 'notification', detail: input.channel })
             return queued
           })
-          return send(res, 201, { id, provider: 'local-log', signature: signDelivery(id) })
+          return send(res, 201, { id, provider: deliveryAdapter().provider, signature: signDelivery(id) })
         }
       }
       const deliverRoute = path.match(/^\/api\/v1\/notifications\/outbox\/([0-9a-f-]+)\/deliver$/i)
       if (deliverRoute) {
         if (!['owner', 'operations_manager'].includes(s.user.role)) fail(403, 'Only operations can run the delivery worker.')
         const id = z.uuid().parse(deliverRoute[1])
-        const row = await store.tenant(s.tenant, async (c) => {
-          const existing = (await c.query('SELECT * FROM message_outbox WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, id])).rows[0]
-          if (!existing) fail(404, 'Queued message not found.')
-          const updated = (await c.query("UPDATE message_outbox SET status='sent',attempts=attempts+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [s.tenant, id])).rows[0]
-          await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'notification_delivered', entity: id, detail: existing.channel })
-          return updated
-        })
-        return send(res, 200, { id: row.id, status: row.status })
+          const row = await store.tenant(s.tenant, async (c) => {
+            const existing = (await c.query('SELECT * FROM message_outbox WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenant, id])).rows[0]
+            if (!existing) fail(404, 'Queued message not found.')
+            const result = await deliverMessage(existing)
+            const updated = (await c.query("UPDATE message_outbox SET status=$1,attempts=attempts+1,provider=$2,last_error=$3,updated_at=now() WHERE tenant_id=$4 AND id=$5 RETURNING *", [result.status, result.provider, result.error, s.tenant, id])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: result.status === 'sent' ? 'notification_delivered' : 'notification_delivery_failed', entity: id, detail: result.status === 'sent' ? existing.channel : result.error })
+            return updated
+          })
+        return send(res, 200, { id: row.id, status: row.status, provider: row.provider, error: row.last_error || undefined })
       }
       const pollRoute = path.match(/^\/api\/v1\/banks\/accounts\/([0-9a-f-]+)\/poll$/i)
       if (pollRoute) {

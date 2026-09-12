@@ -50,10 +50,10 @@ const initialShipments: Shipment[] = [
 ]
 
 export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
-  const [shipments, setShipments] = useState<Shipment[]>(initialShipments)
+  const [shipments, setShipments] = useState<Shipment[]>(() => remote ? [] : initialShipments)
   const [notice, setNotice] = useState('')
 
-  const editable = !remote || remote.user.role !== 'auditor'
+  const editable = !remote
 
   function handleAdvanceShipment(id: string) {
     if (!editable) return
@@ -73,12 +73,13 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
         }
       }),
     )
-    setNotice('Shipment transit milestone updated.')
+    setNotice('Demo milestone updated for this session. No stock movement was posted.')
   }
 
   return (
     <div className="module-panel">
-      {/* Telemetry Row */}
+      <p className="notice">{remote ? 'Inbound carrier tracking is not configured. Receive purchase orders through Purchasing and manage stock through Warehouse Management.' : 'Sample planning board. Changes last for this session only.'}</p>
+      {/* Metrics derive from the current planning board. */}
       <div className="stats-row">
         <div className="stat-card">
           <span className="stat-label">Inbound Shipments</span>
@@ -93,14 +94,14 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
           <small>Carrier logistics expense</small>
         </div>
         <div className="stat-card">
-          <span className="stat-label">On-Time Transit Rate</span>
-          <b className="stat-value" style={{ color: '#16a34a' }}>93.8%</b>
-          <small>Arrival within lead-time buffer</small>
+          <span className="stat-label">Customs cleared</span>
+          <b className="stat-value">{shipments.filter((s) => s.status === 'customs_cleared').length}</b>
+          <small>Awaiting warehouse delivery</small>
         </div>
         <div className="stat-card">
-          <span className="stat-label">Stockout Hazard Coverage</span>
-          <b className="stat-value">18.4 days</b>
-          <small>Average buffer cover across hubs</small>
+          <span className="stat-label">Delivered</span>
+          <b className="stat-value">{shipments.filter((s) => s.status === 'delivered').length}</b>
+          <small>Marked complete on this board</small>
         </div>
       </div>
 
@@ -109,8 +110,8 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
       {/* Inbound Shipment Tracking Table */}
       <section className="card">
         <div className="section-header">
-          <h2>Inbound Shipment & Carrier Tracking</h2>
-          <small>Real-time purchase order transit, customs clearance, and warehouse dock delivery.</small>
+          <h2>Inbound shipment planning</h2>
+          <small>Record internal milestone updates for purchase-order transit, clearance and warehouse delivery.</small>
         </div>
 
         <div className="table-scroll">
@@ -129,6 +130,7 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
               </tr>
             </thead>
             <tbody>
+              {!shipments.length && <tr><td colSpan={9}>No connected inbound shipments. Carrier tracking is not configured.</td></tr>}
               {shipments.map((s) => (
                 <tr key={s.id}>
                   <td><b>{s.poRef}</b></td>
@@ -162,57 +164,11 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
         </div>
       </section>
 
-      {/* Supply Chain Intelligence & Lead-Time Monitoring */}
-      <div className="two-col" style={{ marginTop: '16px' }}>
-        <section className="card">
-          <h2>Supplier Lead Time Reliability Watchlist</h2>
-          <div className="telemetry-list">
-            <div className="telemetry-item">
-              <div>
-                <b>Docking Stations · Kora Imports</b>
-                <small style={{ display: 'block', color: 'var(--text-muted)' }}>Target: 14 days · Actual avg: 13.2 days</small>
-              </div>
-              <span className="badge green">On Track</span>
-            </div>
-            <div className="telemetry-item">
-              <div>
-                <b>Office Monitors · Brightline Displays</b>
-                <small style={{ display: 'block', color: 'var(--text-muted)' }}>Target: 21 days · Actual avg: 26.8 days</small>
-              </div>
-              <span className="badge" style={{ background: '#fef3c7', color: '#b45309' }}>+5.8d Delay</span>
-            </div>
-            <div className="telemetry-item">
-              <div>
-                <b>Wireless Keyboards · TechHub Dist.</b>
-                <small style={{ display: 'block', color: 'var(--text-muted)' }}>Target: 7 days · Actual avg: 6.9 days</small>
-              </div>
-              <span className="badge green">Reliable</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="card">
-          <h2>Multi-Warehouse Inventory Allocation</h2>
-          <div className="telemetry-list">
-            <div className="telemetry-item">
-              <span>Lagos Main Hub (Central Storage)</span>
-              <b>68% total inventory volume</b>
-            </div>
-            <div className="telemetry-item">
-              <span>Abuja Distribution Hub (Northern Hub)</span>
-              <b>24% total inventory volume</b>
-            </div>
-            <div className="telemetry-item">
-              <span>Port Harcourt Depot (South-South)</span>
-              <b>8% total inventory volume</b>
-            </div>
-            <div className="telemetry-item">
-              <span>Inter-Hub Rebalancing Status</span>
-              <b style={{ color: '#16a34a' }}>Balanced (No transfer bottlenecks)</b>
-            </div>
-          </div>
-        </section>
-      </div>
+      <section className="card supply-chain-guidance">
+        <span className="eyebrow">Operational handoff</span>
+        <h2>Use the connected warehouse workflow for stock movement.</h2>
+        <p>When inbound goods arrive, receive the approved purchase order and use Warehouse Management for location allocation and stock transfers. Carrier sync, automated ETA calculation and allocation analytics require a configured provider integration.</p>
+      </section>
     </div>
   )
 }

@@ -32,29 +32,29 @@ const planTiers: PlanTier[] = [
     name: 'Business',
     price: '₦120,000',
     period: 'per month',
-    seats: 12,
+    seats: 25,
     badge: 'Popular',
     features: [
       'Everything in Starter, plus:',
       'HR & Statutory Payroll (PAYE/PenCom)',
       'Procurement & PO Approvals',
       'Multi-Location Warehouse Management',
-      'Up to 12 Team Seats',
+      'Up to 25 Team Seats',
     ],
   },
   {
     id: 'business_pro',
     name: 'Business Pro',
-    price: '₦250,000',
+    price: '₦280,000',
     period: 'per month',
-    seats: 25,
+    seats: 100,
     badge: 'Intelligence Tier',
     features: [
       'Everything in Business, plus:',
       'AI Forecasting & Anomaly Engine',
       'Workflow Automation Engine',
       'Advanced Multi-Branch Scoping',
-      'Up to 25 Team Seats',
+      'Up to 100 Team Seats',
     ],
   },
   {
@@ -77,7 +77,7 @@ const billingHistory = [
     id: 'inv-2026-09',
     date: '1 Sep 2026',
     description: 'Business Pro Subscription · September 2026',
-    amount: '₦250,000',
+    amount: '₦280,000',
     status: 'Paid',
     method: 'Paystack Corporate Direct Debit',
   },
@@ -85,7 +85,7 @@ const billingHistory = [
     id: 'inv-2026-08',
     date: '1 Aug 2026',
     description: 'Business Pro Subscription · August 2026',
-    amount: '₦250,000',
+    amount: '₦280,000',
     status: 'Paid',
     method: 'Paystack Corporate Direct Debit',
   },
@@ -109,7 +109,7 @@ export function BillingPanel() {
           setPlan({
             plan: 'business_pro',
             features: ['core', 'operations', 'reports', 'automation', 'forecast'],
-            seatLimit: 25,
+            seatLimit: 100,
           })
           if (err instanceof Error && !err.message.includes('Sign in')) {
             setError(err.message)
@@ -123,7 +123,7 @@ export function BillingPanel() {
 
   const activePlanId = plan?.plan || 'business_pro'
   const activeSeats = 8
-  const maxSeats = plan?.seatLimit || 25
+  const maxSeats = plan?.seatLimit || 100
   const usagePercent = Math.round((activeSeats / maxSeats) * 100)
 
   return (

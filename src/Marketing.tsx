@@ -134,13 +134,10 @@ export function Marketing({
           </>
         )}
         {page === 'features' && (
-          <section className="features-page">
+          <section style={{ maxWidth: 1100, margin: '0 auto 60px', padding: '0 20px' }}>
             <div className="page-header">
               <h1>Business management modules</h1>
-              <p>
-                Capture operational records, review financial effects and trace
-                decisions to their sources.
-              </p>
+              <p>Capture operational records, review financial effects and trace decisions to their sources.</p>
             </div>
             <div className="module-cards-grid">
               {features.map(([title, description]) => (
@@ -150,69 +147,46 @@ export function Marketing({
                 </article>
               ))}
             </div>
-            <p>
-              Bank synchronisation, payment execution and message delivery
-              depend on configured providers. Workflow rules currently support
-              manual review; automatic execution is not available.
+            <p style={{ marginTop: 24, fontSize: '0.82rem', color: '#5a7a6e', padding: '0 4px' }}>
+              Bank synchronisation, payment execution and message delivery depend on configured providers.
             </p>
           </section>
         )}
         {page === 'pricing' && (
-          <section className="pricing-page">
+          <section>
             <div className="page-header">
               <h1>Plans for different business needs</h1>
-              <p>
-                Plan structure follows the BusinessOS product specification.
-                Pricing and availability are configured by the platform
-                administrator; your workspace shows its assigned plan and
-                enabled features.
-              </p>
+              <p>Plan structure follows the BusinessOS product specification. Pricing and availability are configured by the platform administrator.</p>
             </div>
             <div className="pricing-grid">
               {plans.map(([name, description]) => (
                 <article className="pricing-card" key={name}>
                   <h2>{name}</h2>
                   <p>{description}</p>
-                  <p>Pricing on configuration</p>
+                  <p style={{ fontSize: '0.78rem', color: '#7a9a8e' }}>Pricing on configuration</p>
                 </article>
               ))}
             </div>
-            <p>
-              Additional bank feeds, storage, AI analysis, messaging and API
-              capacity form the planned add-on offering.
+            <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.82rem', color: '#5a7a6e' }}>
+              Additional bank feeds, storage, AI analysis, messaging and API capacity form the planned add-on offering.
             </p>
-            <button className="primary" onClick={onLaunchApp}>
-              View your workspace plan
-            </button>
+            <div style={{ textAlign: 'center', marginTop: 20 }}>
+              <button className="primary cta-large" onClick={onLaunchApp}>View your workspace plan</button>
+            </div>
           </section>
         )}
         {page === 'security' && (
-          <section className="security-page">
+          <section>
             <div className="page-header">
               <h1>Security and control</h1>
-              <p>
-                Access controls and audit records support accountable business
-                operations.
-              </p>
+              <p>Access controls and audit records support accountable business operations.</p>
             </div>
             <div className="security-grid">
               {[
-                [
-                  'Tenant isolation',
-                  'Tenant-scoped access checks and database row-level security separate business records.',
-                ],
-                [
-                  'Roles and permissions',
-                  'Permissions control access to finance, HR and operational workflows. Auditors have read-only access.',
-                ],
-                [
-                  'Financial audit trails',
-                  'Posted journals and audit events retain the source and actor for supported financial workflows.',
-                ],
-                [
-                  'Decision support',
-                  'Analysis uses permitted workspace data. Forecasts require review of their assumptions and available history before decisions are made.',
-                ],
+                ['Tenant isolation', 'Tenant-scoped access checks and database row-level security separate business records.'],
+                ['Roles and permissions', 'Permissions control access to finance, HR and operational workflows. Auditors have read-only access.'],
+                ['Financial audit trails', 'Posted journals and audit events retain the source and actor for supported financial workflows.'],
+                ['Decision support', 'Analysis uses permitted workspace data. Forecasts require review of their assumptions and available history before decisions are made.'],
               ].map(([title, description]) => (
                 <article className="security-card" key={title}>
                   <h2>{title}</h2>
@@ -220,9 +194,8 @@ export function Marketing({
                 </article>
               ))}
             </div>
-            <p>
-              BusinessOS records and coordinates business workflows. It does not
-              hold funds or guarantee statutory tax compliance.
+            <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.82rem', color: '#5a7a6e', padding: '0 20px' }}>
+              BusinessOS records and coordinates business workflows. It does not hold funds or guarantee statutory tax compliance.
             </p>
           </section>
         )}

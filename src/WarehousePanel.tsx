@@ -29,14 +29,15 @@ export function WarehousePanel({ remote, onRefresh }: { remote: Snapshot | null;
   useEffect(() => { void load() }, [remote])
   async function create(event: React.FormEvent, kind: 'fulfillment' | 'return') {
     event.preventDefault(); if (!editable) return
-    const form = new FormData(event.currentTarget as HTMLFormElement)
+    const formElement = event.currentTarget as HTMLFormElement
+    const form = new FormData(formElement)
     const name = String(form.get(kind === 'fulfillment' ? 'orderRef' : 'rma') || '').trim(), detail = String(form.get(kind === 'fulfillment' ? 'items' : 'product') || '').trim()
     if (!name || !detail) return setError('Complete the required fields.')
     const payload = kind === 'fulfillment' ? { orderRef: name, customer: String(form.get('customer') || '').trim(), items: detail, location: String(form.get('location') || '').trim(), assignee: String(form.get('assignee') || '').trim() } : { rma: name, customer: String(form.get('customer') || '').trim(), product: detail, condition: String(form.get('condition') || 'inspecting') }
     setBusy(true); setError('')
     try {
       if (remote) await request('/warehouse/' + (kind === 'fulfillment' ? 'fulfillments' : 'returns'), { method: 'POST', headers, body: JSON.stringify(payload) })
-      await load(); (event.currentTarget as HTMLFormElement).reset(); setNotice(kind === 'fulfillment' ? 'Fulfillment queue item created.' : 'Return inspection created.')
+      await load(); formElement.reset(); setNotice(kind === 'fulfillment' ? 'Fulfillment queue item created.' : 'Return inspection created.')
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save warehouse record.') } finally { setBusy(false) }
   }
   async function update(id: string, status: string, kind: 'fulfillment' | 'return') {
