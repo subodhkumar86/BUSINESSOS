@@ -1831,7 +1831,13 @@ function App({
                       key={run.id}
                       disabled={busy || readOnly}
                       onClick={async () => {
-                        if (!remote) return
+                        if (!remote) {
+                          const now = new Date().toISOString()
+                          const batch: PayrollPaymentBatch = { id: crypto.randomUUID(), payroll_run_id: run.id, amount: run.amount, status: 'pending', created_at: now, updated_at: now }
+                          setPaymentBatches((items) => ({ ...items, [run.id]: items[run.id] || batch }))
+                          setNotice('Demo payment batch generated. It is pending provider submission.')
+                          return
+                        }
                         try {
                           const result = await request<{ batch: PayrollPaymentBatch }>(`/payroll/runs/${run.id}/payment-batches`, {
                             method: 'POST',

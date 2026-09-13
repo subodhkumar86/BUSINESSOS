@@ -99,6 +99,21 @@ test('demo bank reconciliation approves suggested statement entries', async ({ p
   await expect(reconcile).toBeDisabled()
 })
 
+test('demo payroll creates an approved run and payment batch', async ({ page }) => {
+  await page.goto('/login')
+  await page.getByRole('button', { name: 'Explore browser demo' }).click()
+  await page.locator('nav').getByRole('button', { name: 'HR & Payroll', exact: true }).click()
+  await page.getByRole('button', { name: '+ Prepare payroll', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Payroll period', { exact: true }).fill('2026-09')
+  await dialog.getByRole('button', { name: 'Save record', exact: true }).click()
+  const run = page.getByRole('row').filter({ hasText: '2026-09' })
+  await run.getByRole('button', { name: 'Approve accrual', exact: true }).click()
+  await page.getByRole('button', { name: 'Generate payment batch for 2026-09', exact: true }).click()
+  await expect(page.getByText('Demo payment batch generated. It is pending provider submission.')).toBeVisible()
+  await expect(page.getByText('pending', { exact: true })).toBeVisible()
+})
+
 test('mobile core modules keep content inside the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/login')
