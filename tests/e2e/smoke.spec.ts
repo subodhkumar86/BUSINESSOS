@@ -87,6 +87,18 @@ test('demo team chat sends and persists a workspace message', async ({ page }) =
   await expect(chat).toContainText('Browser QA team update')
 })
 
+test('demo bank reconciliation approves suggested statement entries', async ({ page }) => {
+  await page.goto('/login')
+  await page.getByRole('button', { name: 'Explore browser demo' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Banking & Feeds', exact: true }).click()
+  await expect(page.getByText('BusinessOS Demo Operating Account')).toBeVisible()
+  const reconcile = page.getByRole('button', { name: /Auto-Reconcile All Pending/ })
+  await expect(reconcile).toBeEnabled()
+  await reconcile.click()
+  await expect(page.getByText('Demo statement entries reconciled successfully.')).toBeVisible()
+  await expect(reconcile).toBeDisabled()
+})
+
 test('mobile core modules keep content inside the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/login')

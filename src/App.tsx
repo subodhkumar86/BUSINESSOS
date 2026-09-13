@@ -288,8 +288,16 @@ function App({
     return () => window.removeEventListener('popstate', listener)
   }, [])
   useEffect(() => {
-    if (!remote || (page !== 'finance' && page !== 'banking') || !['owner', 'finance_admin', 'auditor'].includes(effectiveRole))
+    if ((page !== 'finance' && page !== 'banking') || !['owner', 'finance_admin', 'auditor'].includes(effectiveRole))
       return
+    if (!remote) {
+      if (!bankAccounts.length) {
+        const account: BankAccount = { id: 'demo-bank-main', provider: 'manual', external_ref: 'DEMO-001', name: 'BusinessOS Demo Operating Account', currency: s.currency, status: 'active', created_at: new Date().toISOString() }
+        const transactions: BankTransaction[] = s.invoices.filter((invoice) => invoice.status === 'Unpaid').slice(0, 3).map((invoice, index) => ({ id: `demo-bank-${invoice.id}`, external_ref: `DEMO-STMT-${index + 1}`, occurred_at: new Date().toISOString(), amount: invoice.amount, direction: 'credit', reference: `Customer payment expected - ${invoice.name}`, match_status: 'suggested', matched_entity_type: 'invoice', matched_entity_id: invoice.id, reconciled_at: null }))
+        setBankAccounts([account]); setSelectedBankAccountId(account.id); setBankTransactions(transactions)
+      }
+      return
+    }
     let active = true
     setBankLoading(true)
     request<{ accounts: BankAccount[] }>('/banks/accounts')
@@ -1433,7 +1441,11 @@ function App({
                       <button
                         disabled={busy || readOnly || !bankTransactions.some((t) => t.match_status === 'suggested')}
                         onClick={async () => {
-                          if (!remote) return
+                          if (!remote) {
+                            setBankTransactions((items) => items.map((t) => t.match_status === 'suggested' ? { ...t, match_status: 'matched', reconciled_at: new Date().toISOString() } : t))
+                            setNotice('Demo statement entries reconciled successfully.')
+                            return
+                          }
                           try {
                             for (const tx of bankTransactions.filter((t) => t.match_status === 'suggested')) {
                               await request(`/banks/accounts/${activeBankAccount.id}/transactions/${tx.id}`, {
