@@ -810,6 +810,24 @@ export async function createApp(config: {
         fail(403, 'Session verification failed. Reload and try again.')
       if (req.method === 'GET' && path === '/api/v1/workspace')
         return send(res, 200, await snap(s))
+      if (path === '/api/v1/workspace/chat') {
+        if (req.method === 'GET') return send(res, 200, await store.tenant(s.tenant, async (c) => {
+          await ensureCurrent(c, s)
+          const rows = await c.query(`SELECT m.id,m.body,m.created_at,m.sender_id,u.name AS sender_name,u.role AS sender_role FROM workspace_messages m JOIN users u ON u.id=m.sender_id WHERE m.tenant_id=$1 ORDER BY m.created_at DESC,id DESC LIMIT 100`, [s.tenant])
+          return { messages: rows.rows.reverse() }
+        }))
+        if (req.method === 'POST') {
+          if (s.user.role === 'auditor') fail(403, 'Workspace chat is read-only for auditors.')
+          const input = z.object({ body: z.string().trim().min(1).max(2000) }).strict().parse(await body(req))
+          return send(res, 201, await store.tenant(s.tenant, async (c) => {
+            await ensureCurrent(c, s)
+            const row = (await c.query('INSERT INTO workspace_messages(id,tenant_id,sender_id,body) VALUES($1,$2,$3,$4) RETURNING id,body,created_at,sender_id', [randomUUID(), s.tenant, s.user.id, input.body])).rows[0]
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'workspace_message_posted', entity: row.id, detail: input.body.slice(0, 120) })
+            return { ...row, sender_name: s.user.name, sender_role: s.user.role }
+          }))
+        }
+        fail(405, 'Method not supported.')
+      }
       const notificationRoute = /^\/api\/v1\/notifications(?:\/([0-9a-f-]+)\/read)?$/i.exec(path)
       if (notificationRoute) {
         const notificationId = notificationRoute[1] ? z.string().uuid().parse(notificationRoute[1]) : undefined

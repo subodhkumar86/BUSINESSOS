@@ -672,9 +672,9 @@ function App({
   return (
     <div className="shell" aria-busy={busy}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      <aside>
+      <aside className="app-sidebar">
         <div className="brand">
-          <span className="logo">B</span>Business<span>OS</span>
+          <span className="logo">B</span><span>Business<span>OS</span></span>
         </div>
         <div className="workspace">
           <span className="avatar">{s.organisation.slice(0, 1)}</span>
@@ -774,15 +774,12 @@ function App({
         </div>
       </aside>
       <div className="main">
-        <header>
-          <span>
-            Workspace{' '}
-            <span className="muted">
-              {' '}
-              / {pages.find((x) => x[0] === current)?.[1] || current}
-            </span>
-          </span>
-          <div>
+        <header className="app-header">
+          <div className="breadcrumb">
+            <span className="breadcrumb-kicker">WORKSPACE</span>
+            <span className="breadcrumb-current">{pages.find((x) => x[0] === current)?.[1] || current}</span>
+          </div>
+          <div className="header-actions">
             {!remote ? (
               <div className="role-switcher-wrap" title="Preview the local demo as another role">
                 <span className="role-simulator-badge">DEMO ROLE</span>
@@ -811,7 +808,7 @@ function App({
               {remote ? 'SERVER MVP' : 'LOCAL MVP'}
             </span>
             <NotificationsBell remote={remote} />
-            <span className="avatar" title={`Role: ${effectiveRole}`}>
+            <span className="avatar header-avatar" title={`Role: ${effectiveRole}`}>
               {effectiveRole.slice(0, 2).toUpperCase()}
             </span>
           </div>
@@ -823,16 +820,16 @@ function App({
               <h1>{titles[current][0]}</h1>
               <p>{titles[current][1]}</p>
             </div>
-            <button onClick={csv}>↓ Export report</button>
+            <button onClick={csv}>{'↓'} Export report</button>
           </div>
           {readOnly && (
             <div className="notice" style={{ background: '#fdf5e6', borderColor: '#f39c12', color: '#7e3f00' }}>
-              🔒 <b>Auditor Account · Universal Read-Only Access</b>: In accordance with PRD §5, Auditor accounts have view-only access across all records for review and audit trails. All creating, editing, and approval mutations are strictly blocked.
+              {'🔒 '}<b>Auditor account · universal read-only access</b>: You can review all records and audit trails, but creating, editing and approval actions are unavailable.
             </div>
           )}
           {effectiveRole !== 'owner' && !readOnly && (
             <div className="notice" style={{ background: '#f6f5fe', borderColor: '#d3cff7', color: '#4d419f' }}>
-              👤 <b>Active Role: {roleMatrix[effectiveRole].title}</b> — {roleMatrix[effectiveRole].accessSummary}. <i>Restriction: {roleMatrix[effectiveRole].restrictions}</i>
+              {'👤 '}<b>Active role: {roleMatrix[effectiveRole].title}</b> — {roleMatrix[effectiveRole].accessSummary}. <i>Restriction: {roleMatrix[effectiveRole].restrictions}</i>
             </div>
           )}
           {error && (
@@ -913,10 +910,10 @@ function App({
                               style={{
                                 width: `${Math.min(100, (total / Math.max(1, ...s.leads.map((l) => l.amount))) * 100)}%`,
                                 background: [
-                                  '#6965dc',
-                                  '#8b88e7',
-                                  '#a9a7ef',
-                                  '#c8c6f5',
+                                  '#2563eb',
+                                  '#3b82f6',
+                                  '#60a5fa',
+                                  '#93c5fd',
                                 ][i],
                               }}
                             />

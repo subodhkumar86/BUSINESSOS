@@ -1307,6 +1307,26 @@ try {
     assert.equal(unread.data.notifications.some((item: { id: string }) => item.id === notice.id), false)
   })
 
+  await test('workspace chat is tenant-scoped, validated, audited, and read-only for auditors', async () => {
+    const body = 'Operations handover is ready for review.'
+    assert.equal((await call('/workspace/chat', 'POST', { body }, owner)).status, 201)
+    assert.equal((await call('/workspace/chat', 'POST', { body: '   ' }, owner)).status, 400)
+    const ownChat = await call('/workspace/chat', 'GET', undefined, owner)
+    assert.equal(ownChat.status, 200)
+    assert.equal(ownChat.data.messages.some((item: { body: string }) => item.body === body), true)
+    const otherChat = await call('/workspace/chat', 'GET', undefined, other)
+    assert.equal(otherChat.status, 200)
+    assert.equal(otherChat.data.messages.some((item: { body: string }) => item.body === body), false)
+    const email = randomUUID() + '@example.test'
+    assert.equal((await call('/users', 'POST', { name: 'Chat auditor', email, password: 'chat-auditor-password', role: 'auditor' }, owner)).status, 201)
+    const login = await call('/auth/login', 'POST', { email, password: 'chat-auditor-password' })
+    const auditor = { cookie: login.cookie, snapshot: login.data } as Account
+    assert.equal((await call('/workspace/chat', 'POST', { body: 'Should not send.' }, auditor)).status, 403)
+    assert.equal((await call('/workspace/chat', 'GET', undefined, auditor)).data.messages.some((item: { body: string }) => item.body === body), true)
+    const audit = await call('/audit-logs', 'GET', undefined, owner)
+    assert.equal(audit.data.entries.some((item: { action: string; detail: string }) => item.action === 'workspace_message_posted' && item.detail === body), true)
+  })
+
   await test('document metadata is validated, tenant-scoped, and archived instead of deleted', async () => {
     const created = await call(
       '/documents',

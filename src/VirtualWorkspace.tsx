@@ -7,6 +7,7 @@ interface Announcement {
   body: string
   created_at: string
 }
+interface WorkspaceMessage { id: string; body: string; created_at: string; sender_name: string; sender_role: string }
 export function VirtualWorkspace({
   remote,
   state,
@@ -15,14 +16,16 @@ export function VirtualWorkspace({
   state: State
 }) {
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
+  const [messages, setMessages] = useState<WorkspaceMessage[]>([])
+  const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(Boolean(remote))
   useEffect(() => {
     if (!remote) return
     let active = true
-    request<{ notifications: Announcement[] }>('/notifications')
-      .then((data) => {
-        if (active) setAnnouncements(data.notifications)
+    Promise.all([request<{ notifications: Announcement[] }>('/notifications'), request<{ messages: WorkspaceMessage[] }>('/workspace/chat')])
+      .then(([data, chat]) => {
+        if (active) { setAnnouncements(data.notifications); setMessages(chat.messages) }
       })
       .catch((cause) => {
         if (active)
@@ -39,6 +42,14 @@ export function VirtualWorkspace({
       active = false
     }
   }, [remote])
+  async function sendMessage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!remote || !message.trim()) return
+    try {
+      const created = await request<WorkspaceMessage>('/workspace/chat', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ body: message.trim() }) })
+      setMessages((current) => [...current, created]); setMessage('')
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not send message.') }
+  }
   return (
     <div className="module-panel">
       <section className="card">
@@ -67,6 +78,14 @@ export function VirtualWorkspace({
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="card">
+        <div className="section-header"><div><h2>Team chat</h2><small>Tenant-private messages for your workspace.</small></div></div>
+        <div className="preview-list">
+          {messages.map((item) => <article className="preview-row" key={item.id}><div><b>{item.sender_name}</b><small>{item.body}</small></div><small>{new Date(item.created_at).toLocaleString()}</small></article>)}
+          {!messages.length && !loading && <p className="empty">No messages yet. Start the conversation.</p>}
+        </div>
+        {remote?.user.role !== 'auditor' && <form className="inline-form" onSubmit={(event) => void sendMessage(event)}><input value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} placeholder="Write a team message" required /><button className="primary">Send message</button></form>}
       </section>
       <section className="card">
         <h2>Company announcements</h2>

@@ -147,7 +147,7 @@ export function Marketing({
                 </article>
               ))}
             </div>
-            <p style={{ marginTop: 24, fontSize: '0.82rem', color: '#5a7a6e', padding: '0 4px' }}>
+            <p style={{ marginTop: 24, fontSize: '0.82rem', color: '#64748b', padding: '0 4px' }}>
               Bank synchronisation, payment execution and message delivery depend on configured providers.
             </p>
           </section>
@@ -163,11 +163,11 @@ export function Marketing({
                 <article className="pricing-card" key={name}>
                   <h2>{name}</h2>
                   <p>{description}</p>
-                  <p style={{ fontSize: '0.78rem', color: '#7a9a8e' }}>Pricing on configuration</p>
+                  <p style={{ fontSize: '0.78rem', color: '#64748b' }}>Pricing on configuration</p>
                 </article>
               ))}
             </div>
-            <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.82rem', color: '#5a7a6e' }}>
+            <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.82rem', color: '#64748b' }}>
               Additional bank feeds, storage, AI analysis, messaging and API capacity form the planned add-on offering.
             </p>
             <div style={{ textAlign: 'center', marginTop: 20 }}>
@@ -194,7 +194,7 @@ export function Marketing({
                 </article>
               ))}
             </div>
-            <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.82rem', color: '#5a7a6e', padding: '0 20px' }}>
+            <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.82rem', color: '#64748b', padding: '0 20px' }}>
               BusinessOS records and coordinates business workflows. It does not hold funds or guarantee statutory tax compliance.
             </p>
           </section>

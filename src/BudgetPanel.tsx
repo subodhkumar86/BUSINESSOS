@@ -54,7 +54,7 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ flex: 1, height: 8, background: '#eee', borderRadius: 4 }}>
-                      <div style={{ width: pct(b) + '%', height: '100%', background: pct(b) > 90 ? '#e74c3c' : '#6965dc', borderRadius: 4 }} />
+                      <div style={{ width: pct(b) + '%', height: '100%', background: pct(b) > 90 ? '#dc2626' : '#2563eb', borderRadius: 4 }} />
                     </div>
                     <span style={{ fontSize: '0.8rem' }}>{pct(b)}%</span>
                   </div>
