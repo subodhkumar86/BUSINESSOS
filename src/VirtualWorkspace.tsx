@@ -8,6 +8,7 @@ interface Announcement {
   created_at: string
 }
 interface WorkspaceMessage { id: string; body: string; created_at: string; sender_name: string; sender_role: string }
+const demoChatStorageKey = 'businessos-demo-team-chat'
 export function VirtualWorkspace({
   remote,
   state,
@@ -21,7 +22,15 @@ export function VirtualWorkspace({
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(Boolean(remote))
   useEffect(() => {
-    if (!remote) return
+    if (!remote) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(demoChatStorageKey) || '[]')
+        if (Array.isArray(saved)) setMessages(saved)
+      } catch {
+        localStorage.removeItem(demoChatStorageKey)
+      }
+      return
+    }
     let active = true
     Promise.all([request<{ notifications: Announcement[] }>('/notifications'), request<{ messages: WorkspaceMessage[] }>('/workspace/chat')])
       .then(([data, chat]) => {
@@ -44,9 +53,20 @@ export function VirtualWorkspace({
   }, [remote])
   async function sendMessage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!remote || !message.trim()) return
+    const body = message.trim()
+    if (!body) return
+    if (!remote) {
+      const created: WorkspaceMessage = { id: crypto.randomUUID(), body, created_at: new Date().toISOString(), sender_name: 'Demo owner', sender_role: 'owner' }
+      setMessages((current) => {
+        const next = [...current, created]
+        localStorage.setItem(demoChatStorageKey, JSON.stringify(next))
+        return next
+      })
+      setMessage('')
+      return
+    }
     try {
-      const created = await request<WorkspaceMessage>('/workspace/chat', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ body: message.trim() }) })
+      const created = await request<WorkspaceMessage>('/workspace/chat', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ body }) })
       setMessages((current) => [...current, created]); setMessage('')
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not send message.') }
   }

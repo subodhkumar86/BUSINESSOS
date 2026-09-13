@@ -73,6 +73,20 @@ test('demo invoice saves, collects once and survives reload', async ({ page }) =
   await expect(invoice).toContainText('Paid')
 })
 
+test('demo team chat sends and persists a workspace message', async ({ page }) => {
+  await page.goto('/login')
+  await page.getByRole('button', { name: 'Explore browser demo' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Virtual Workspace', exact: true }).click()
+  const chat = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Team chat', exact: true }) })
+  await chat.getByPlaceholder('Write a team message').fill('Browser QA team update')
+  await chat.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(chat).toContainText('Browser QA team update')
+  await page.reload()
+  await page.getByRole('button', { name: 'Explore browser demo' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Virtual Workspace', exact: true }).click()
+  await expect(chat).toContainText('Browser QA team update')
+})
+
 test('mobile core modules keep content inside the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/login')
