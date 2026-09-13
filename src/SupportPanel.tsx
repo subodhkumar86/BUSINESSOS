@@ -43,11 +43,13 @@ const demoTickets: SupportTicket[] = [
     sla_due_at: new Date(Date.now() - 3600000 * 4).toISOString(),
   },
 ]
+const demoTicketsStorageKey = 'businessos-demo-support-tickets'
 
 export function SupportPanel({ remote }: { remote: Snapshot | null }) {
-  const [tickets, setTickets] = useState<SupportTicket[]>(() =>
-    remote ? [] : demoTickets,
-  )
+  const [tickets, setTickets] = useState<SupportTicket[]>(() => {
+    if (remote) return []
+    try { const saved = JSON.parse(localStorage.getItem(demoTicketsStorageKey) || 'null'); return Array.isArray(saved) ? saved : demoTickets } catch { return demoTickets }
+  })
   const [feedbackMetrics, setFeedbackMetrics] = useState({ responses: 0, csat: 0, nps: 0, nps_score: 0 })
   const [loading, setLoading] = useState(Boolean(remote))
   const [busy, setBusy] = useState(false)
@@ -82,6 +84,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
       active = false
     }
   }, [remote, revision])
+  useEffect(() => { if (!remote) localStorage.setItem(demoTicketsStorageKey, JSON.stringify(tickets)) }, [tickets, remote])
 
   async function handleCreateTicket(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -166,8 +169,16 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
     }
   }
   async function recordFeedback(ticketId: string, form: HTMLFormElement) {
-    if (!remote || busy) return
+    if (busy) return
     const data = new FormData(form)
+    if (!remote) {
+      const csat = Number(data.get('csat')), nps = Number(data.get('nps'))
+      setFeedbackMetrics((current) => {
+        const responses = current.responses + 1
+        return { responses, csat: (current.csat * current.responses + csat) / responses, nps: (current.nps * current.responses + nps) / responses, nps_score: ((current.nps * current.responses + nps) / responses) * 10 - 50 }
+      })
+      setNotice('Demo customer feedback recorded.'); form.reset(); return
+    }
     setBusy(true); setError(''); setNotice('')
     try {
       await request(`/support/tickets/${ticketId}/feedback`, { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ csat: Number(data.get('csat')), nps: Number(data.get('nps')), comment: String(data.get('comment') || '') }) })
@@ -325,7 +336,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
                         <option value="resolved">Resolved</option>
                         <option value="closed">Closed</option>
                       </select>
-                      {remote && editable && ['resolved', 'closed'].includes(t.status) && <details><summary>Record feedback</summary><form onSubmit={(event) => { event.preventDefault(); void recordFeedback(t.id, event.currentTarget) }}><label>CSAT<select name="csat" defaultValue="5"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label><label>NPS<select name="nps" defaultValue="10">{Array.from({ length: 11 }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label><label>Comment<textarea name="comment" maxLength={2000} /></label><button disabled={busy}>Save feedback</button></form></details>}
+                      {editable && ['resolved', 'closed'].includes(t.status) && <details><summary>Record feedback</summary><form onSubmit={(event) => { event.preventDefault(); void recordFeedback(t.id, event.currentTarget) }}><label>CSAT<select name="csat" defaultValue="5"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option></select></label><label>NPS<select name="nps" defaultValue="10">{Array.from({ length: 11 }, (_, value) => <option key={value} value={value}>{value}</option>)}</select></label><label>Comment<textarea name="comment" maxLength={2000} /></label><button disabled={busy}>Save feedback</button></form></details>}
                     </td>
                   </tr>
                 ))}

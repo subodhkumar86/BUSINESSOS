@@ -15,6 +15,7 @@ import {validateProductionUpdate, depreciation} from './operational-rules.ts'
 import {requiredFeature, actionFeature} from './entitlements.ts'
 import { webhookBinding, verifyBankSignature, normalizeBankEvent } from './bank-webhooks.ts'
 import { suggestReconciliation } from './reconciliation.ts'
+import { enrichWithDeepSeek } from './deepseek.ts'
 import {
   createServer,
   type IncomingMessage,
@@ -26,6 +27,7 @@ import {
   scrypt,
   timingSafeEqual,
   createHash,
+  createCipheriv,
 } from 'node:crypto'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
@@ -905,6 +907,19 @@ export async function createApp(config: {
       const required=requiredFeature(path)
       if(required && !entitlement?.features.includes(required)) return fail(403,'Your subscription does not include this feature.')
       if(req.method==='GET' && path==='/api/v1/billing/entitlements') return send(res,200,{plan:entitlement.id,features:entitlement.features,seatLimit:entitlement.seat_limit})
+      if (path === '/api/v1/connectors') {
+        if (!['owner','auditor'].includes(s.user.role)) fail(403,'Your role cannot view tenant connectors.')
+        if (req.method === 'GET') return send(res,200,await store.tenant(s.tenant,async c=>({ connectors:(await c.query('SELECT id,category,provider,status,configuration,created_at,updated_at FROM tenant_provider_connectors WHERE tenant_id=$1 ORDER BY category,provider',[s.tenant])).rows })))
+        if (s.user.role !== 'owner') fail(403,'Only the Tenant Super Admin can manage connectors.')
+        if (req.method === 'POST') {
+          const b=z.object({category:z.enum(['email','sms','whatsapp','bank_feed','payment','three_pl']),provider:text,status:z.enum(['draft','sandbox','active','disabled']).default('draft'),configuration:z.record(z.string(),z.string().max(500)).default({}),credentials:z.record(z.string(),z.string().max(1000)).optional()}).strict().parse(await body(req))
+          if(b.category==='bank_feed' && !entitlement.features.includes('bank_feeds')) fail(403,'Live bank feeds are available on the Enterprise plan only.')
+          const encrypted=(()=>{ if(!b.credentials) return [null,null,null]; const raw=process.env.TENANT_CONNECTOR_ENCRYPTION_KEY; if(!raw) fail(503,'Connector credential encryption is not configured.'); const key=Buffer.from(raw || '','base64'); if(key.length!==32) fail(503,'Connector credential encryption key is invalid.'); const iv=randomBytes(12), cipher=createCipheriv('aes-256-gcm',key,iv); const value=Buffer.concat([cipher.update(JSON.stringify(b.credentials),'utf8'),cipher.final()]); return [value,iv,cipher.getAuthTag()] })()
+          const id=randomUUID(); await store.tenant(s.tenant,async c=>{await c.query('INSERT INTO tenant_provider_connectors(id,tenant_id,category,provider,status,configuration,encrypted_credentials,credential_iv,credential_tag,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[id,s.tenant,b.category,b.provider,b.status,b.configuration,...encrypted,s.user.id]); await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'tenant_connector_configured',entity:id,detail:`${b.category}:${b.provider}`})})
+          return send(res,201,{id,category:b.category,provider:b.provider,status:b.status})
+        }
+        fail(405,'Method not supported.')
+      }
       if (path === '/api/v1/crm/customers' || path.startsWith('/api/v1/crm/customers/')) {
         const route = new RegExp('^/api/v1/crm/customers(?:/([^/]+)(?:/(interactions))?)?$').exec(path)
         if (!route) return fail(404, 'Route not found.')
@@ -964,7 +979,7 @@ export async function createApp(config: {
           })
           return insight(state, input.question)
         })
-        return send(res, 200, result)
+        return send(res, 200, await enrichWithDeepSeek(input.question, result))
       }
       if (req.method === 'POST' && path === '/api/v1/ai/forecast') {
         if (['auditor', 'super_admin'].includes(s.user.role))
@@ -2234,6 +2249,48 @@ export async function createApp(config: {
           })
           return send(res, 200, { ok: true })
         }
+      }
+      if (path === '/api/v1/tax/settings') {
+        if (!canReadModule(s.user.role, 'tax'))
+          fail(403, 'Your role cannot view tax settings.')
+        if (req.method === 'GET') {
+          return send(res, 200, await store.tenant(s.tenant, async (c) => {
+            const result = await c.query(
+              `SELECT country_code,jurisdiction,currency,financial_year_start_month,
+                      vat_rate,withholding_rate,income_tax_rate,payroll_employee_rate,
+                      payroll_employer_rate,invoice_prefix,tax_inclusive,compliance_notes,updated_at
+                 FROM tenant_statutory_settings WHERE tenant_id=$1`, [s.tenant])
+            return { settings: result.rows[0] || {
+              country_code: 'NG', jurisdiction: 'Nigeria', currency: 'NGN', financial_year_start_month: 1,
+              vat_rate: 0.075, withholding_rate: 0.05, income_tax_rate: 0.3,
+              payroll_employee_rate: 0, payroll_employer_rate: 0, invoice_prefix: 'INV',
+              tax_inclusive: false, compliance_notes: '', updated_at: null,
+            } }
+          }))
+        }
+        if (!canWriteModule(s.user.role, 'tax'))
+          fail(403, 'Your role cannot manage tax settings.')
+        if (req.method === 'PATCH') {
+          const rate = z.number().finite().min(0).max(1)
+          const b = z.object({
+            countryCode: z.string().regex(/^[A-Z]{2}$/), jurisdiction: text,
+            currency: z.string().regex(/^[A-Z]{3}$/), financialYearStartMonth: z.number().int().min(1).max(12),
+            vatRate: rate, withholdingRate: rate, incomeTaxRate: rate,
+            payrollEmployeeRate: rate, payrollEmployerRate: rate,
+            invoicePrefix: z.string().regex(/^[A-Z0-9-]{1,16}$/), taxInclusive: z.boolean(),
+            complianceNotes: z.string().max(2000),
+          }).strict().parse(await body(req))
+          await store.tenant(s.tenant, async (c) => {
+            await c.query(
+              `INSERT INTO tenant_statutory_settings(tenant_id,country_code,jurisdiction,currency,financial_year_start_month,vat_rate,withholding_rate,income_tax_rate,payroll_employee_rate,payroll_employer_rate,invoice_prefix,tax_inclusive,compliance_notes)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               ON CONFLICT(tenant_id) DO UPDATE SET country_code=EXCLUDED.country_code,jurisdiction=EXCLUDED.jurisdiction,currency=EXCLUDED.currency,financial_year_start_month=EXCLUDED.financial_year_start_month,vat_rate=EXCLUDED.vat_rate,withholding_rate=EXCLUDED.withholding_rate,income_tax_rate=EXCLUDED.income_tax_rate,payroll_employee_rate=EXCLUDED.payroll_employee_rate,payroll_employer_rate=EXCLUDED.payroll_employer_rate,invoice_prefix=EXCLUDED.invoice_prefix,tax_inclusive=EXCLUDED.tax_inclusive,compliance_notes=EXCLUDED.compliance_notes,updated_at=now()`,
+              [s.tenant,b.countryCode,b.jurisdiction,b.currency,b.financialYearStartMonth,b.vatRate,b.withholdingRate,b.incomeTaxRate,b.payrollEmployeeRate,b.payrollEmployerRate,b.invoicePrefix,b.taxInclusive,b.complianceNotes])
+            await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'tenant_statutory_settings_updated', entity: 'tenant_statutory_settings', detail: JSON.stringify({ countryCode: b.countryCode, jurisdiction: b.jurisdiction, currency: b.currency }) })
+          })
+          return send(res, 200, { ok: true })
+        }
+        fail(405, 'Method not supported.')
       }
       const taxRoute = path.match(
         /^\/api\/v1\/tax\/filings(?:\/([0-9a-f-]+))?$/i,
@@ -3576,7 +3633,7 @@ export async function createApp(config: {
           return send(res,200,{plans:rows.map(p=>({...p,description:'Server-enforced subscription features',limits:'Up to '+p.seat_limit+' seats'}))})
         }
         if(req.method==='PATCH') {
-          const b=z.object({id:z.enum(['starter','business','business_pro','enterprise']),price:text,features:z.array(z.enum(['core','operations','reports','automation','forecast'])).min(1),seatLimit:z.number().int().min(1).max(100000)}).strict().parse(await body(req))
+          const b=z.object({id:z.enum(['starter','business','business_pro','enterprise']),price:text,features:z.array(z.enum(['core','operations','reports','automation','forecast','bank_feeds'])).min(1),seatLimit:z.number().int().min(1).max(100000)}).strict().parse(await body(req))
           await store.tenant(s.tenant,async c=>{
             await c.query('UPDATE subscription_plans SET price=$1,features=$2,seat_limit=$3 WHERE id=$4',[b.price,b.features,b.seatLimit,b.id])
             await store.append(c,s.tenant,{id:randomUUID(),date:new Date().toISOString(),actor:s.user.email,action:'subscription_plan_updated',entity:'plan',detail:JSON.stringify(b)})

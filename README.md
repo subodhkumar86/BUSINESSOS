@@ -68,7 +68,7 @@ Local Compose credentials are development-only, bound to loopback. Production mu
 - PostgreSQL versioned migrations, transactional workspace updates, tenant row-security policies, row locking and optimistic version checks.
 - Append-only PostgreSQL journal/audit tables with update/delete rejection triggers. These protect application writes, not against a database administrator who can change the schema.
 - Redis sessions with eight-hour expiry, hashed opaque session keys, HttpOnly/SameSite cookies, explicit origin checks, CSRF tokens and shared login throttling.
-- Owner registration, sign-in/sign-out, password change, sign-out-everywhere, and owner-created tenant accounts across the supported role matrix. RBAC is enforced on core actions and protected module endpoints; auditors have read-only access. Field-level permissions are not yet implemented.
+- Tenant Super Admin registration, sign-in/sign-out, password change, sign-out-everywhere, and Tenant Super Admin-created tenant accounts across the supported role matrix. Each user signs in with their provisioned email and password; SSO is not required. RBAC is enforced on core actions and protected module endpoints; auditors have read-only access. Field-level permissions are not yet implemented.
 - Team settings list users and let the owner disable or restore non-owner accounts. Access changes and password rotation increment a PostgreSQL session version; every request revalidates it. Restoring access never restores an old session. Owners cannot disable themselves. Security actions are audited.
 - Startup checks reject superuser/BYPASSRLS database credentials and missing account-security migrations. Existing sessions issued before migration 002 require a fresh sign-in.
 - Server-derived tenant scope. The client cannot choose a tenant ID or write a whole workspace snapshot.
@@ -96,7 +96,7 @@ The nine core screens and existing invoice, expense, inventory, purchasing, CRM,
 | GET /api/v1/finance/export.csv                    | Owner / finance admin / auditor              | Download a tenant-scoped, audited finance CSV                                 |
 | GET /api/v1/audit-logs                            | Owner / auditor                              | Read the latest tenant-scoped immutable audit events                          |
 | GET /api/v1/bi/metrics                            | Session                                      | Read metrics derived from the caller's permitted tenant data                  |
-| POST /api/v1/ai/ask                               | Non-auditor session + CSRF                   | Run and audit explainable deterministic analysis; no external model is called |
+| POST /api/v1/ai/ask                               | Non-auditor session + CSRF                   | Run and audit explainable deterministic analysis; optionally enrich its redacted calculation summary with server-only DeepSeek credentials |
 | POST /api/v1/ai/forecast                          | Non-auditor session + CSRF                   | Produce and audit a labelled deterministic scenario forecast                  |
 | GET /api/v1/users                                 | Owner                                        | List own tenant users                                                         |
 | POST /api/v1/users                                | Owner + CSRF                                 | Create a non-owner tenant account; no email is sent                           |

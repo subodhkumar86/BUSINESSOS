@@ -29,7 +29,7 @@ const planTiers: PlanTier[] = [
   },
   {
     id: 'business',
-    name: 'Business',
+    name: 'Growth',
     price: '₦120,000',
     period: 'per month',
     seats: 25,
@@ -50,7 +50,7 @@ const planTiers: PlanTier[] = [
     seats: 100,
     badge: 'Intelligence Tier',
     features: [
-      'Everything in Business, plus:',
+      'Everything in Growth, plus:',
       'AI Forecasting & Anomaly Engine',
       'Workflow Automation Engine',
       'Advanced Multi-Branch Scoping',
@@ -64,8 +64,8 @@ const planTiers: PlanTier[] = [
     period: 'annual contract',
     seats: 1000,
     features: [
-      'Dedicated Instance & Single Sign-On',
-      'Custom ERP/Banking Integrations',
+      'Dedicated instance & customisation options',
+      'Optional live bank feeds and custom banking integrations',
       'Unlimited Seats & Data Capacity',
       '24/7 Dedicated Support SLA',
     ],

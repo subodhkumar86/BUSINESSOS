@@ -10,6 +10,7 @@ const STEPS = [
   { id: 'bank', page: 'banking', label: 'Connect a bank account', detail: 'Open Banking & Feeds and add a bank account.' },
   { id: 'team', page: 'settings', label: 'Invite a team member', detail: 'Open Settings and create a user account.' },
 ]
+const demoOnboardingStorageKey = 'businessos-demo-onboarding'
 
 interface OnboardingState {
   completedSteps: string[]
@@ -27,16 +28,34 @@ export function OnboardingWizard({
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!remote || remote.user.role !== 'owner') return
-    request<OnboardingState>('/onboarding').then(setState).catch(() => undefined)
+    if (remote) {
+      if (remote.user.role !== 'owner') return
+      request<OnboardingState>('/onboarding').then(setState).catch(() => undefined)
+      return
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(demoOnboardingStorageKey) || '{"completedSteps":[],"dismissed":false}')
+      setState({ completedSteps: Array.isArray(saved.completedSteps) ? saved.completedSteps : [], dismissed: Boolean(saved.dismissed) })
+    } catch {
+      setState({ completedSteps: [], dismissed: false })
+    }
   }, [remote])
 
-  if (!remote || remote.user.role !== 'owner' || !state || state.dismissed) return null
+  if ((remote && remote.user.role !== 'owner') || !state || state.dismissed) return null
   const remaining = STEPS.filter((step) => !state.completedSteps.includes(step.id))
   if (!remaining.length) return null
 
   async function complete(stepId: string) {
-    if (!remote || busy) return
+    if (busy) return
+    if (!remote) {
+      setState((previous) => {
+        if (!previous || previous.completedSteps.includes(stepId)) return previous
+        const next = { ...previous, completedSteps: [...previous.completedSteps, stepId] }
+        localStorage.setItem(demoOnboardingStorageKey, JSON.stringify(next))
+        return next
+      })
+      return
+    }
     setBusy(true)
     try {
       await request('/onboarding', {
@@ -55,7 +74,13 @@ export function OnboardingWizard({
   }
 
   async function dismiss() {
-    if (!remote || busy) return
+    if (busy) return
+    if (!remote) {
+      const next = { completedSteps: state?.completedSteps || [], dismissed: true }
+      localStorage.setItem(demoOnboardingStorageKey, JSON.stringify(next))
+      setState(next)
+      return
+    }
     setBusy(true)
     try {
       await request('/onboarding', {

@@ -258,3 +258,20 @@ These are outstanding requirements, not verified capabilities. Do not call the f
 - Paid subscription lifecycle and usage quotas beyond seats; SSO.
 - Production monitoring/alert delivery, backup/restore exercise, load testing and final security review.
 - Browser E2E verification (requires running dev servers and Playwright browsers installed).
+
+## Tenant configuration and modular connector update — 14 September 2026
+
+- Tenant statutory settings: country, jurisdiction, currency, financial year, tax/payroll rates, invoice rules and compliance notes are tenant-isolated, role-protected and audited.
+- Tenant `owner` is displayed as **Tenant Super Admin** and provisions tenant user accounts; platform `super_admin` remains separate. SSO is not required.
+- Plans are Starter, Growth, Business Pro and Enterprise. Enterprise includes the `bank_feeds` entitlement.
+- Tenant-scoped Email, SMS, WhatsApp, Payment, 3PL and Bank Feed connector configuration is stored under forced RLS. Credentials are encrypted server-side, never returned, and audited. Bank Feed configuration is Enterprise-only; 3PL begins in sandbox.
+- Optional DeepSeek enrichment uses a redacted calculation summary and safely falls back to deterministic BI.
+
+### Verification — 14 September 2026
+
+- Production build and TypeScript: passed.
+- Unit tests: **72/72 passed**.
+- PostgreSQL/Redis integration suite: **46/46 passed**, applying migrations through `042_tenant_provider_connectors.sql`.
+- Playwright browser suite: **17/17 passed**.
+
+External provider credentials, verified sender identities, production HTTPS/webhooks, provider sandbox contracts, production monitoring and backup/restore approval remain external configuration work.

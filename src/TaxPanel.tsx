@@ -19,6 +19,26 @@ export interface TaxFiling {
   created_at?: string
   updated_at?: string
 }
+interface StatutorySettings {
+  country_code: string
+  jurisdiction: string
+  currency: string
+  financial_year_start_month: number
+  vat_rate: number
+  withholding_rate: number
+  income_tax_rate: number
+  payroll_employee_rate: number
+  payroll_employer_rate: number
+  invoice_prefix: string
+  tax_inclusive: boolean
+  compliance_notes: string
+}
+const defaultSettings: StatutorySettings = {
+  country_code: 'NG', jurisdiction: 'Nigeria', currency: 'NGN', financial_year_start_month: 1,
+  vat_rate: 0.075, withholding_rate: 0.05, income_tax_rate: 0.3,
+  payroll_employee_rate: 0, payroll_employer_rate: 0, invoice_prefix: 'INV',
+  tax_inclusive: false, compliance_notes: '',
+}
 
 const demoFilings: TaxFiling[] = [
   {
@@ -63,7 +83,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const territory = 'Nigeria'
+  const [settings, setSettings] = useState<StatutorySettings>(defaultSettings)
   const [revision, setRevision] = useState(0)
 
   // Tax Calculator States
@@ -81,9 +101,10 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
   useEffect(() => {
     let active = true
     if (!remote) return
-    request<{ filings: TaxFiling[] }>('/tax/filings')
-      .then((data) => {
+    Promise.all([request<{ filings: TaxFiling[] }>('/tax/filings'), request<{ settings: StatutorySettings }>('/tax/settings')])
+      .then(([data, settingsData]) => {
         if (active) setFilings(data.filings)
+        if (active) setSettings({ ...defaultSettings, ...settingsData.settings, vat_rate: Number(settingsData.settings.vat_rate), withholding_rate: Number(settingsData.settings.withholding_rate), income_tax_rate: Number(settingsData.settings.income_tax_rate), payroll_employee_rate: Number(settingsData.settings.payroll_employee_rate), payroll_employer_rate: Number(settingsData.settings.payroll_employer_rate) })
       })
       .catch((e) => {
         if (active) setError(e.message)
@@ -112,7 +133,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
       const newFiling: TaxFiling = {
         id: 'tf-' + Date.now(),
         name,
-        territory,
+        territory: settings.jurisdiction,
         due_date: dueDate,
         amount,
         status: 'draft',
@@ -130,7 +151,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
         headers: { 'X-CSRF-Token': remote.csrf },
         body: JSON.stringify({
           name,
-          territory,
+          territory: settings.jurisdiction,
           dueDate,
           amount,
         }),
@@ -177,13 +198,32 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
     }
   }
 
-  const vatCalc = calculateVAT(vatAmount || 0, vatInclusive)
-  const whtCalc = calculateWHT(whtGross || 0, whtCategory)
-  const citCalc = calculateCIT(citTurnover || 0, citProfit || 0)
+  const vatCalc = calculateVAT(vatAmount || 0, vatInclusive, settings.vat_rate)
+  const whtCalc = calculateWHT(whtGross || 0, whtCategory, settings.withholding_rate)
+  const citCalc = calculateCIT(citTurnover || 0, citProfit || 0, settings.income_tax_rate)
 
   const pendingTotal = filings
     .filter((f) => f.status !== 'paid')
     .reduce((acc, f) => acc + f.amount, 0)
+
+  async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!editable || busy) return
+    const values = new FormData(event.currentTarget)
+    const next: StatutorySettings = {
+      country_code: String(values.get('countryCode')).toUpperCase(), jurisdiction: String(values.get('jurisdiction')).trim(),
+      currency: String(values.get('currency')).toUpperCase(), financial_year_start_month: Number(values.get('financialYearStartMonth')),
+      vat_rate: Number(values.get('vatRate')) / 100, withholding_rate: Number(values.get('withholdingRate')) / 100,
+      income_tax_rate: Number(values.get('incomeTaxRate')) / 100, payroll_employee_rate: Number(values.get('payrollEmployeeRate')) / 100,
+      payroll_employer_rate: Number(values.get('payrollEmployerRate')) / 100, invoice_prefix: String(values.get('invoicePrefix')).toUpperCase(),
+      tax_inclusive: values.get('taxInclusive') === 'on', compliance_notes: String(values.get('complianceNotes')).trim(),
+    }
+    setBusy(true); setError(''); setNotice('')
+    try {
+      if (remote) await request('/tax/settings', { method: 'PATCH', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ countryCode: next.country_code, jurisdiction: next.jurisdiction, currency: next.currency, financialYearStartMonth: next.financial_year_start_month, vatRate: next.vat_rate, withholdingRate: next.withholding_rate, incomeTaxRate: next.income_tax_rate, payrollEmployeeRate: next.payroll_employee_rate, payrollEmployerRate: next.payroll_employer_rate, invoicePrefix: next.invoice_prefix, taxInclusive: next.tax_inclusive, complianceNotes: next.compliance_notes }) })
+      setSettings(next); setNotice(remote ? 'Tenant statutory settings saved and audited.' : 'Demo tenant statutory settings saved.')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not save statutory settings.') } finally { setBusy(false) }
+  }
 
   return (
     <div className="module-panel">
@@ -191,8 +231,8 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
       <div className="stats-row">
         <div className="stat-card">
           <span className="stat-label">Tax Territory</span>
-          <b className="stat-value">{territory}</b>
-          <small>FIRS / Tax Act 2026 rules</small>
+          <b className="stat-value">{settings.jurisdiction}</b>
+          <small>{settings.country_code} · tenant-configured rules</small>
         </div>
         <div className="stat-card">
           <span className="stat-label">Pending Filings</span>
@@ -203,8 +243,8 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
         </div>
         <div className="stat-card">
           <span className="stat-label">Standard VAT Rate</span>
-          <b className="stat-value">7.5%</b>
-          <small>Applicable on vatable supplies</small>
+          <b className="stat-value">{(settings.vat_rate * 100).toFixed(2)}%</b>
+          <small>Tenant configured VAT/GST rate</small>
         </div>
         <div className="stat-card">
           <span className="stat-label">Remittance Integrity</span>
@@ -216,12 +256,31 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
       {error && <p role="alert" className="notice error">{error}</p>}
       {notice && <p role="status" className="notice success">{notice}</p>}
 
-      {/* Interactive Nigerian Tax Calculation Simulator */}
+      {editable && <section className="card" style={{ marginBottom: '16px' }}>
+        <div className="section-header"><h2>Tenant tax, payroll & invoice configuration</h2><small>These rules apply only to this tenant. Confirm rates with a qualified local adviser before filing.</small></div>
+        <form className="operations-fields" onSubmit={(event) => void saveSettings(event)}>
+          <label>Country code<input name="countryCode" defaultValue={settings.country_code} pattern="[A-Z]{2}" required /></label>
+          <label>Tax jurisdiction<input name="jurisdiction" defaultValue={settings.jurisdiction} required /></label>
+          <label>Currency<input name="currency" defaultValue={settings.currency} pattern="[A-Z]{3}" required /></label>
+          <label>Financial year starts (month)<input name="financialYearStartMonth" type="number" min="1" max="12" defaultValue={settings.financial_year_start_month} required /></label>
+          <label>VAT / GST rate (%)<input name="vatRate" type="number" min="0" max="100" step="0.001" defaultValue={settings.vat_rate * 100} required /></label>
+          <label>Withholding rate (%)<input name="withholdingRate" type="number" min="0" max="100" step="0.001" defaultValue={settings.withholding_rate * 100} required /></label>
+          <label>Income tax rate (%)<input name="incomeTaxRate" type="number" min="0" max="100" step="0.001" defaultValue={settings.income_tax_rate * 100} required /></label>
+          <label>Employee payroll deduction (%)<input name="payrollEmployeeRate" type="number" min="0" max="100" step="0.001" defaultValue={settings.payroll_employee_rate * 100} required /></label>
+          <label>Employer payroll contribution (%)<input name="payrollEmployerRate" type="number" min="0" max="100" step="0.001" defaultValue={settings.payroll_employer_rate * 100} required /></label>
+          <label>Invoice prefix<input name="invoicePrefix" defaultValue={settings.invoice_prefix} pattern="[A-Z0-9-]{1,16}" required /></label>
+          <label><input name="taxInclusive" type="checkbox" defaultChecked={settings.tax_inclusive} /> Invoice amounts include tax by default</label>
+          <label>Compliance notes<textarea name="complianceNotes" defaultValue={settings.compliance_notes} maxLength={2000} /></label>
+          <button className="primary" disabled={busy}>Save tenant settings</button>
+        </form>
+      </section>}
+
+      {/* Interactive tenant-configured tax calculator */}
       <div className="two-col">
         <section className="card">
           <div className="section-header">
             <h2>Value Added Tax (VAT) Calculator</h2>
-            <small>Standard 7.5% Nigerian statutory rate with inclusive or exclusive pricing.</small>
+            <small>Uses this tenant's configured VAT/GST rate and inclusive/exclusive pricing selection.</small>
           </div>
           <div className="operations-fields">
             <label>
@@ -249,7 +308,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
               <b>₦{vatCalc.baseAmount.toLocaleString()}</b>
             </div>
             <div className="telemetry-item">
-              <span>VAT at 7.5%</span>
+              <span>VAT at {(settings.vat_rate * 100).toFixed(2)}%</span>
               <b style={{ color: '#2563eb' }}>₦{vatCalc.vatAmount.toLocaleString()}</b>
             </div>
             <div className="telemetry-item">
@@ -262,7 +321,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
         <section className="card">
           <div className="section-header">
             <h2>Withholding Tax (WHT) Deduction</h2>
-            <small>Withhold at statutory rates (5% or 10%) before vendor disbursement.</small>
+            <small>Uses this tenant's configured withholding rate before vendor disbursement.</small>
           </div>
           <div className="operations-fields">
             <label>
@@ -307,7 +366,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
       <section className="card" style={{ marginTop: '16px' }}>
         <div className="section-header">
           <h2>Company Income Tax (CIT) Bracket Assessment</h2>
-          <small>Determine enterprise tax bracket and estimate liability under Nigerian Companies Income Tax rules.</small>
+          <small>Estimate a liability using tenant inputs. Obtain local professional approval before filing.</small>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
           <label>

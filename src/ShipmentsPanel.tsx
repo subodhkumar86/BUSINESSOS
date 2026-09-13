@@ -26,7 +26,12 @@ export function ShipmentsPanel({
     remote && ['owner', 'operations_manager'].includes(remote.user.role),
   )
   useEffect(() => {
-    if (!remote) return
+    if (!remote) {
+      setRows([{ id: 'demo-shipment-1', order_ref: 'SO-DEMO-1001', customer: 'Demo customer', product_id: 'demo-product', product_name: 'Demo inventory item', quantity: 2, source_location_id: null, source_location_name: null, status: 'picking', version: 1, stock_movement_id: null, dispatched_at: null, created_at: new Date().toISOString() }])
+      setLocations([])
+      setLoading(false)
+      return
+    }
     let active = true
     Promise.all([
       request<{ shipments: Shipment[] }>('/warehouse/shipments'),
@@ -54,7 +59,14 @@ export function ShipmentsPanel({
     }
   }, [remote, reload])
   async function mutate(path: string, method: string, input: unknown) {
-    if (!remote || saving.current) return false
+    if (!remote) {
+      const status = (input as { status?: Shipment['status'] }).status
+      if (method !== 'PATCH' || !status) return false
+      setRows((current) => current.map((row) => row.id === path.split('/').at(-1) ? { ...row, status, version: row.version + 1, stock_movement_id: status === 'dispatched' ? 'DEMO-STOCK-POSTED' : row.stock_movement_id, dispatched_at: status === 'dispatched' ? new Date().toISOString() : row.dispatched_at } : row))
+      setNotice(status === 'dispatched' ? 'Demo shipment dispatched. Stock and cost posting recorded.' : `Demo shipment marked ${status}.`)
+      return true
+    }
+    if (saving.current) return false
     saving.current = true
     setBusy(true)
     setError('')
@@ -103,7 +115,6 @@ export function ShipmentsPanel({
       setBusy(false)
     }
   }
-  if (!remote) return <p>Sign in to manage warehouse shipments.</p>
   const stageCount = (stage: Shipment['status']) =>
     rows.filter((row) => row.status === stage).length
   const inProgress = stageCount('picking') + stageCount('packed')
@@ -142,7 +153,7 @@ export function ShipmentsPanel({
           {notice}
         </p>
       )}
-      {editable && (
+      {editable && remote && (
         <form
           className="operations-fields"
           onSubmit={async (event) => {
@@ -261,7 +272,7 @@ export function ShipmentsPanel({
                   <td>{row.source_location_name || 'Unallocated stock'}</td>
                   <td><span className={row.status === 'dispatched' ? 'badge green' : row.status === 'cancelled' ? 'badge red' : 'badge'}>{row.status}</span></td>
                   <td>
-                    {editable &&
+                    {(editable || !remote) &&
                       (shipmentTransitions[row.status] || []).map((status) => (
                         <button
                           key={status}

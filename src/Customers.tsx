@@ -21,6 +21,8 @@ interface Interaction {
   follow_up_on: string | null
   actor: string
 }
+const demoCustomerKey = 'businessos-demo-customers'
+const demoInteractionKey = 'businessos-demo-customer-interactions'
 export function Customers({ remote }: { remote: Snapshot | null }) {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [selected, setSelected] = useState<Customer | null>(null)
@@ -31,11 +33,17 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
   const [error, setError] = useState(''),
     [notice, setNotice] = useState('')
   const [revision, setRevision] = useState(0)
-  const editable =
-    remote && ['owner', 'sales_crm_user'].includes(remote.user.role)
+  const editable = !remote || ['owner', 'sales_crm_user'].includes(remote.user.role)
   useEffect(() => {
     let active = true
-    if (!remote) return
+    if (!remote) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(demoCustomerKey) || '[]')
+        if (active) setCustomers(Array.isArray(saved) ? saved : [])
+      } catch { if (active) setCustomers([]) }
+      setBusy(false)
+      return
+    }
     request<{ customers: Customer[] }>('/crm/customers')
       .then((data) => {
         if (active) setCustomers(data.customers)
@@ -53,6 +61,14 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
   useEffect(() => {
     let active = true
     if (!selected) return
+    if (!remote) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(demoInteractionKey) || '{}')
+        if (active) setHistory(Array.isArray(saved[selected.id]) ? saved[selected.id] : [])
+      } catch { if (active) setHistory([]) }
+      if (active) setLoadingHistory(false)
+      return
+    }
     request<{ interactions: Interaction[] }>(
       `/crm/customers/${selected.id}/interactions`,
     )
@@ -70,8 +86,27 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
     }
   }, [selected, revision])
   async function save(form: HTMLFormElement, interaction = false) {
-    if (!remote || busy) return
+    if (busy) return
     const values = Object.fromEntries(new FormData(form))
+    if (!remote) {
+      if (interaction && selected) {
+        const item: Interaction = { id: crypto.randomUUID(), kind: String(values.kind), summary: String(values.summary), occurred_at: new Date(String(values.occurredAt)).toISOString(), follow_up_on: values.followUpOn ? String(values.followUpOn) : null, actor: 'Demo owner' }
+        setHistory((current) => {
+          const next = [item, ...current]
+          const all = JSON.parse(localStorage.getItem(demoInteractionKey) || '{}'); all[selected.id] = next
+          localStorage.setItem(demoInteractionKey, JSON.stringify(all)); return next
+        })
+      } else {
+        const customer: Customer = { id: selected?.id || crypto.randomUUID(), name: String(values.name), email: String(values.email || ''), phone: String(values.phone || ''), address: String(values.address || ''), tax_reference: String(values.taxReference || ''), status: String(values.status || 'active'), marketing_opt_in: values.marketingOptIn === 'on', version: (selected?.version || 0) + 1 }
+        setCustomers((current) => {
+          const next = selected ? current.map((item) => item.id === customer.id ? customer : item) : [customer, ...current]
+          localStorage.setItem(demoCustomerKey, JSON.stringify(next)); return next
+        })
+        setSelected(null)
+      }
+      form.reset(); setNotice(interaction ? 'Demo interaction logged.' : 'Demo customer saved successfully.')
+      return
+    }
     setBusy(true)
     setError('')
     setNotice('')
@@ -103,13 +138,6 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
       setBusy(false)
     }
   }
-  if (!remote)
-    return (
-      <section className="panel">
-        <h2>Customers</h2>
-        <p>Sign in to manage customer profiles and interaction history.</p>
-      </section>
-    )
   return (
     <section className="panel operations-panel">
       <h2>Customers & interaction history</h2>

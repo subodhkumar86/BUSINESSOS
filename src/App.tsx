@@ -32,6 +32,7 @@ import type {
 } from './types'
 import { request, saveAction, ApiError } from './api'
 import { Team } from './Team'
+import { ConnectorsPanel } from './ConnectorsPanel'
 
 function LeadScorePanel({ remote, state }: { remote: import('./types').Snapshot; state: import('./types').State }) {
   const [scores, setScores] = useState<{ leadId: string; name: string; status: string; score: number }[]>([])
@@ -225,7 +226,7 @@ function App({
 }) {
   const [s, setS] = useState(remote?.state || loaded.data),
     [page, setPage] = useState(
-      location.pathname.split('/').pop() || 'dashboard',
+      location.pathname.startsWith('/admin') ? 'admin' : location.pathname.split('/').pop() || 'dashboard',
     ),
     [search, setSearch] = useState(''),
     [modal, setModal] = useState<CreateCollection | 'payroll' | null>(null),
@@ -282,7 +283,7 @@ function App({
     .reduce((total, transaction) => total + Number(transaction.amount), 0)
   useEffect(() => {
     const listener = () => {
-      setPage(location.pathname.split('/').pop() || 'dashboard')
+      setPage(location.pathname.startsWith('/admin') ? 'admin' : location.pathname.split('/').pop() || 'dashboard')
     }
     window.addEventListener('popstate', listener)
     return () => window.removeEventListener('popstate', listener)
@@ -637,7 +638,21 @@ function App({
   }
   const visiblePages = pages.filter(([id]) => canViewPage(id, effectiveRole))
   const current = titles[page] && canViewPage(page, effectiveRole) ? page : 'dashboard'
-  function handleAiQuestion(qText: string) {
+  async function handleAiQuestion(qText: string) {
+    if (remote) {
+      try {
+        const result = await request<{ answer: string; confidence: string; dataWindow: string; engine: string; sources: { module: string; records: number }[]; calculation: Record<string, unknown> }>('/ai/ask', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': remote.csrf },
+          body: JSON.stringify({ question: qText }),
+        })
+        setAnswer(result.answer)
+        setAiLineage(`Confidence: ${result.confidence}. Data window: ${result.dataWindow}. Engine: ${result.engine}. Sources: ${result.sources.map((source) => `${source.module} (${source.records} records)`).join(', ')}. Calculation: ${Object.entries(result.calculation).map(([key, value]) => `${key}=${value}`).join(', ')}.`)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'AI analysis could not be completed.')
+      }
+      return
+    }
     const q = qText.toLowerCase()
     const monthlySalaries = s.employees.reduce((a, x) => a + x.amount, 0)
     const monthlyExpenses = s.expenses.reduce((a, x) => a + x.amount, 0)
@@ -2088,7 +2103,7 @@ function App({
                         className="prompt-pill"
                         onClick={() => {
                           setQuestion(promptText)
-                          handleAiQuestion(promptText)
+                          void handleAiQuestion(promptText)
                         }}
                       >
                         {promptText}
@@ -2098,7 +2113,7 @@ function App({
                   <form
                     onSubmit={(e) => {
                       e.preventDefault()
-                      handleAiQuestion(question)
+                      void handleAiQuestion(question)
                     }}
                   >
                     <div className="ask">
@@ -2218,6 +2233,7 @@ function App({
               <RoleMatrix />
               {remote && <Security csrf={remote.csrf} />}
               {remote?.user.role === 'owner' && <Team csrf={remote.csrf} />}
+              {remote?.user.role === 'owner' && <ConnectorsPanel csrf={remote.csrf} plan={remote.entitlements?.plan} />}
               {section(
                 'Organisation',
                 <form

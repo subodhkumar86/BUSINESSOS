@@ -3,6 +3,7 @@ import { request } from './api'
 import { userRoles, type User, type UserRole } from './types'
 import { RoleMatrix } from './RoleMatrix'
 type Member = User & { active: boolean }
+const roleLabel = (role: UserRole) => role === 'owner' ? 'Tenant Super Admin' : role.replaceAll('_', ' ')
 export function Team({ csrf }: { csrf: string }) {
   const [members, setMembers] = useState<Member[]>([]),
     [message, setMessage] = useState(''),
@@ -87,7 +88,7 @@ export function Team({ csrf }: { csrf: string }) {
                 <tr key={member.id}>
                   <td>{member.name}</td>
                   <td>{member.email}</td>
-                  <td>{member.role}</td>
+                  <td>{roleLabel(member.role)}</td>
                   <td>{member.active ? 'Active' : 'Disabled'}</td>
                   <td>
                     {member.role !== 'owner' ? (
@@ -98,7 +99,7 @@ export function Team({ csrf }: { csrf: string }) {
                         {member.active ? 'Disable access' : 'Restore access'}
                       </button>
                     ) : (
-                      <span>Workspace owner</span>
+                      <span>Tenant Super Admin</span>
                     )}
                   </td>
                 </tr>
@@ -140,7 +141,7 @@ export function Team({ csrf }: { csrf: string }) {
             form.reset()
             await refresh()
             setMessage(
-              'User created successfully with role. Share the initial credentials through your secure channel.',
+              'User profile created. Share the initial credentials through your secure channel.',
             )
           } catch (e) {
             setError(
@@ -156,7 +157,7 @@ export function Team({ csrf }: { csrf: string }) {
           <select name="role" defaultValue="employee">
             {userRoles.filter((role) => role !== 'owner' && role !== 'super_admin').map((role) => (
               <option key={role} value={role}>
-                {role.replaceAll('_', ' ')}
+                {roleLabel(role)}
               </option>
             ))}
           </select>

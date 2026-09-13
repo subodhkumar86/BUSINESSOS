@@ -65,6 +65,7 @@ const demoDocuments: DocumentItem[] = [
 ]
 
 const categories = ['All', 'Procurement', 'HR', 'Legal', 'Finance', 'Operations']
+const demoDocumentsStorageKey = 'businessos-demo-documents'
 
 function asBase64(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -79,9 +80,13 @@ function asBase64(file: File) {
 }
 
 export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
-  const [documents, setDocuments] = useState<DocumentItem[]>(() =>
-    remote ? [] : demoDocuments,
-  )
+  const [documents, setDocuments] = useState<DocumentItem[]>(() => {
+    if (remote) return []
+    try {
+      const saved = JSON.parse(localStorage.getItem(demoDocumentsStorageKey) || 'null')
+      return Array.isArray(saved) ? saved : demoDocuments
+    } catch { return demoDocuments }
+  })
   const [loading, setLoading] = useState(Boolean(remote))
   const [selectedFolder, setSelectedFolder] = useState('All')
   const [search, setSearch] = useState('')
@@ -114,6 +119,9 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
       active = false
     }
   }, [remote, revision])
+  useEffect(() => {
+    if (!remote) localStorage.setItem(demoDocumentsStorageKey, JSON.stringify(documents))
+  }, [documents, remote])
 
   async function handleRegisterFile(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -211,7 +219,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
   async function generateSecureShareLink(doc: DocumentItem, hours = 24) {
     if (!remote) {
       const token = crypto.randomUUID().replace(/-/g, '')
-      const expiresMs = Date.now() + hours * 3600 * 1000
+      const expiresMs = new Date().valueOf() + hours * 3600 * 1000
       setSharedLink({
         id: doc.id,
         url: `${window.location.origin}/share/doc/${doc.id}?token=${token}&exp=${expiresMs}`,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { request } from './api'
 import type { Snapshot } from './types'
 
@@ -11,23 +11,33 @@ const demoRules: Rule[] = [
   { id: 'demo-stock', name: 'Low-stock review', trigger: 'Inventory falls below reorder level', action: 'Create a procurement review task', target: 'Inventory', status: 'active' },
   { id: 'demo-invoice', name: 'Overdue receivable reminder', trigger: 'Invoice is overdue', action: 'Queue a customer reminder for review', target: 'Finance & CRM', status: 'active' },
 ]
+const demoAutomationRulesKey = 'businessos-demo-automation-rules'
+const demoAutomationLogsKey = 'businessos-demo-automation-logs'
 const dateLabel = (value?: string) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Not yet run'
 function storedRule(row: Stored): Rule | null { if (row.metadata.kind !== 'rule') return null; return { id: row.id, name: row.name, trigger: String(row.metadata.trigger || row.detail), action: String(row.metadata.action || ''), target: String(row.metadata.target || 'Operations'), status: row.status === 'paused' ? 'paused' : 'active', updatedAt: row.updated_at } }
 function storedLog(row: Stored): Log | null { if (row.metadata.kind !== 'execution') return null; return { id: row.id, ruleName: row.name, details: row.detail, status: row.status, createdAt: row.created_at } }
 
 export function AutomationPanel({ remote }: { remote: Snapshot | null }) {
-  const [rules, setRules] = useState<Rule[]>(remote ? [] : demoRules)
-  const [logs, setLogs] = useState<Log[]>([])
+  const [rules, setRules] = useState<Rule[]>(() => {
+    if (remote) return []
+    try { const saved = JSON.parse(localStorage.getItem(demoAutomationRulesKey) || 'null'); return Array.isArray(saved) ? saved : demoRules } catch { return demoRules }
+  })
+  const [logs, setLogs] = useState<Log[]>(() => {
+    if (remote) return []
+    try { const saved = JSON.parse(localStorage.getItem(demoAutomationLogsKey) || '[]'); return Array.isArray(saved) ? saved : [] } catch { return [] }
+  })
   const [name, setName] = useState(''), [trigger, setTrigger] = useState(''), [action, setAction] = useState(''), [target, setTarget] = useState('Operations')
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const editable = !remote || remote.user.role !== 'auditor'
   const headers: Record<string, string> = remote ? { 'X-CSRF-Token': remote.csrf } : {}
-  async function load() {
+  const load = useCallback(async () => {
     if (!remote) return
     try { const data = await request<{ records: Stored[] }>('/modules/automation'); setRules(data.records.map(storedRule).filter((item): item is Rule => Boolean(item))); setLogs(data.records.map(storedLog).filter((item): item is Log => Boolean(item))) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load automation.') }
-  }
-  useEffect(() => { void load() }, [remote])
+  }, [remote])
+  useEffect(() => { void load() }, [load])
+  useEffect(() => { if (!remote) localStorage.setItem(demoAutomationRulesKey, JSON.stringify(rules)) }, [rules, remote])
+  useEffect(() => { if (!remote) localStorage.setItem(demoAutomationLogsKey, JSON.stringify(logs)) }, [logs, remote])
   const active = useMemo(() => rules.filter(rule => rule.status === 'active').length, [rules])
   async function createRule(event: React.FormEvent) {
     event.preventDefault(); if (!name.trim() || !trigger.trim() || !action.trim()) return setError('Enter a name, trigger, and action.')

@@ -27,7 +27,13 @@ export function ReturnsPanel({
     remote && ['owner', 'operations_manager'].includes(remote.user.role),
   )
   useEffect(() => {
-    if (!remote) return
+    if (!remote) {
+      const now = new Date().toISOString()
+      setShipments([{ id: 'demo-return-shipment', order_ref: 'SO-DEMO-1000', customer: 'Demo customer', product_id: 'demo-product', product_name: 'Demo inventory item', quantity: 1, source_location_id: null, source_location_name: null, status: 'dispatched', version: 1, stock_movement_id: 'DEMO-DISPATCHED', dispatched_at: now, created_at: now }])
+      setRows([{ id: 'demo-return-1', shipment_id: 'demo-return-shipment', order_ref: 'SO-DEMO-1000', customer: 'Demo customer', product_name: 'Demo inventory item', quantity: 1, reason: 'Demo customer return', destination_location_id: null, destination_location_name: null, status: 'inspecting', condition: null, inspection_notes: '', version: 1, stock_movement_id: null, created_at: now }])
+      setLocations([]); setLoading(false)
+      return
+    }
     let active = true
     Promise.all([
       request<{ returns: ShipmentReturn[] }>('/warehouse/shipment-returns'),
@@ -55,7 +61,16 @@ export function ReturnsPanel({
     }
   }, [remote, reload])
   async function mutate(path: string, method: string, input: unknown) {
-    if (!remote || saving.current) return false
+    if (!remote) {
+      const id = path.split('/').at(-1)
+      const patch = input as { status?: string; condition?: 'restockable' | 'damaged'; inspectionNotes?: string }
+      const status = patch.status
+      if (method !== 'PATCH' || !id || !status) return false
+      setRows((current) => current.map((row) => row.id === id ? { ...row, status, condition: patch.condition ?? row.condition, inspection_notes: patch.inspectionNotes ?? row.inspection_notes, version: row.version + 1, stock_movement_id: status === 'restocked' ? 'DEMO-RESTOCK-POSTED' : row.stock_movement_id } : row))
+      setNotice(status === 'restocked' ? 'Demo return restocked. Inventory and COGS reversal recorded.' : status === 'inspected' ? 'Demo return inspection recorded.' : `Demo return marked ${status}.`)
+      return true
+    }
+    if (saving.current) return false
     saving.current = true
     setBusy(true)
     setError('')
@@ -104,7 +119,6 @@ export function ReturnsPanel({
       setBusy(false)
     }
   }
-  if (!remote) return <p>Sign in to manage shipment returns.</p>
   const remaining = (shipment: Shipment) =>
     shipment.quantity -
     rows
@@ -262,7 +276,7 @@ export function ReturnsPanel({
                 Inspection: {row.condition} — {row.inspection_notes}
               </p>
             )}
-            {editable && row.status === 'inspecting' && (
+            {(editable || !remote) && row.status === 'inspecting' && (
               <form
                 className="operations-fields"
                 onSubmit={async (event) => {
@@ -297,7 +311,7 @@ export function ReturnsPanel({
                 <button disabled={busy}>Save inspection</button>
               </form>
             )}
-            {editable && row.status === 'inspected' && (
+            {(editable || !remote) && row.status === 'inspected' && (
               <button
                 disabled={busy}
                 onClick={() =>
@@ -319,7 +333,7 @@ export function ReturnsPanel({
                   : 'Close damaged return'}
               </button>
             )}
-            {editable && ['inspecting', 'inspected'].includes(row.status) && (
+            {(editable || !remote) && ['inspecting', 'inspected'].includes(row.status) && (
               <button
                 disabled={busy}
                 onClick={() =>

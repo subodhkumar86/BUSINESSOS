@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { request } from './api'
 import type { Snapshot } from './types'
 
@@ -11,12 +11,12 @@ export function NotificationsBell({ remote }: { remote: Snapshot | null }) {
   const [compose, setCompose] = useState(false)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  async function load() {
+  const load = useCallback(async () => {
     if (!remote) return
     try { const result = await request<{ notifications: Notification[] }>('/notifications?unread=true'); setItems(result.notifications); setAvailable(true) }
     catch { setAvailable(false) }
-  }
-  useEffect(() => { void load(); if (!remote) return; const timer = window.setInterval(() => void load(), 60000); return () => window.clearInterval(timer) }, [remote])
+  }, [remote])
+  useEffect(() => { void load(); if (!remote) return; const timer = window.setInterval(() => void load(), 60000); return () => window.clearInterval(timer) }, [remote, load])
   async function markRead(id: string) {
     try { await request('/notifications/' + id + '/read', { method: 'PATCH', headers: { 'X-CSRF-Token': remote?.csrf || '' }, body: '{}' }); setItems(current => current.filter(item => item.id !== id)) }
     catch { setAvailable(false) }

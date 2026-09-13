@@ -27,35 +27,36 @@ export const CIT_RATES: Record<CompanyScale, { rate: number; threshold: string; 
 
 const positiveFinite = z.number().finite().nonnegative()
 
-export function calculateVAT(baseAmount: number, inclusive = false): {
+export function calculateVAT(baseAmount: number, inclusive = false, vatRate = VAT_RATE): {
   baseAmount: number
   vatAmount: number
   totalAmount: number
   effectiveRate: number
 } {
   positiveFinite.parse(baseAmount)
+  if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 1) throw new Error('VAT rate must be between 0 and 100%.')
   if (inclusive) {
     // totalAmount = baseAmount; netBase = total / 1.075
-    const netBase = Math.round((baseAmount / (1 + VAT_RATE)) * 100) / 100
+    const netBase = Math.round((baseAmount / (1 + vatRate)) * 100) / 100
     const vat = Math.round((baseAmount - netBase) * 100) / 100
     return {
       baseAmount: netBase,
       vatAmount: vat,
       totalAmount: baseAmount,
-      effectiveRate: VAT_RATE,
+      effectiveRate: vatRate,
     }
   }
-  const vat = Math.round(baseAmount * VAT_RATE * 100) / 100
+  const vat = Math.round(baseAmount * vatRate * 100) / 100
   const total = Math.round((baseAmount + vat) * 100) / 100
   return {
     baseAmount,
     vatAmount: vat,
     totalAmount: total,
-    effectiveRate: VAT_RATE,
+    effectiveRate: vatRate,
   }
 }
 
-export function calculateWHT(grossInvoiceAmount: number, category: WhtCategory): {
+export function calculateWHT(grossInvoiceAmount: number, category: WhtCategory, overrideRate?: number): {
   grossAmount: number
   category: WhtCategory
   categoryLabel: string
@@ -66,13 +67,15 @@ export function calculateWHT(grossInvoiceAmount: number, category: WhtCategory):
   positiveFinite.parse(grossInvoiceAmount)
   const config = WHT_RATES[category]
   if (!config) throw new Error(`Unknown WHT category: ${category}`)
-  const wht = Math.round(grossInvoiceAmount * config.rate * 100) / 100
+  const rate = overrideRate === undefined ? config.rate : overrideRate
+  if (!Number.isFinite(rate) || rate < 0 || rate > 1) throw new Error('Withholding rate must be between 0 and 100%.')
+  const wht = Math.round(grossInvoiceAmount * rate * 100) / 100
   const net = Math.round((grossInvoiceAmount - wht) * 100) / 100
   return {
     grossAmount: grossInvoiceAmount,
     category,
     categoryLabel: config.label,
-    whtRate: config.rate,
+    whtRate: rate,
     whtDeducted: wht,
     netPayable: net,
   }
@@ -85,7 +88,7 @@ export function determineCompanyScale(annualTurnover: number): CompanyScale {
   return 'large'
 }
 
-export function calculateCIT(annualTurnover: number, taxableProfit: number): {
+export function calculateCIT(annualTurnover: number, taxableProfit: number, overrideRate?: number): {
   annualTurnover: number
   taxableProfit: number
   scale: CompanyScale
@@ -96,7 +99,11 @@ export function calculateCIT(annualTurnover: number, taxableProfit: number): {
   positiveFinite.parse(annualTurnover)
   positiveFinite.parse(taxableProfit)
   const scale = determineCompanyScale(annualTurnover)
-  const { rate, label } = CIT_RATES[scale]
+  const configured = overrideRate === undefined ? null : overrideRate
+  if (configured !== null && (!Number.isFinite(configured) || configured < 0 || configured > 1)) throw new Error('Income tax rate must be between 0 and 100%.')
+  const { rate: defaultRate, label: defaultLabel } = CIT_RATES[scale]
+  const rate = configured ?? defaultRate
+  const label = configured === null ? defaultLabel : `Tenant configured income tax rate (${(rate * 100).toFixed(2)}%)`
   const cit = Math.round(taxableProfit * rate * 100) / 100
   return {
     annualTurnover,

@@ -204,7 +204,7 @@ export const roleMatrix: Record<UserRole, RolePermissionInfo> = {
   },
   owner: {
     role: 'owner',
-    title: 'Business Owner',
+    title: 'Tenant Super Admin',
     canDo: 'Full tenant visibility, approvals, settings, user management, reporting and billing',
     restrictions: 'Cannot bypass immutable audit records',
     accessSummary: 'Complete access to all 20 business modules and administrative controls',
