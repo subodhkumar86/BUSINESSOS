@@ -35,3 +35,9 @@ For a split deployment, Vercel hosts the Vite frontend and Render hosts only the
 5. Verify a browser login from the Vercel URL, then confirm the response has `Access-Control-Allow-Origin` equal to the Vercel origin, `Access-Control-Allow-Credentials: true`, and a `Secure; SameSite=None` session cookie.
 
 For long-term production, use custom domains such as `app.example.com` (Vercel) and `api.example.com` (Render), list `https://app.example.com` as `APP_ORIGIN`, and keep HTTPS enabled everywhere.
+
+## cPanel (Passenger)
+
+`CPANEL.md` documents the shared-hosting path: one Passenger Node.js process serving the SPA and `/api/v1` on one HTTPS origin, with managed PostgreSQL and Redis, `app.cjs` as the startup file, and Terminal-free helpers (`scripts/cpanel-build.cjs`, `scripts/cpanel-migrate.cjs`, `scripts/cpanel-seed.cjs`, `scripts/cpanel-doctor.cjs`) that run through **Setup Node.js App > Run JS script**.
+
+The Node.js build must be **22.18 or newer** (24 recommended), because the API runs its TypeScript sources directly and Node strips the types at startup. Docker and CI still pin Node 24.

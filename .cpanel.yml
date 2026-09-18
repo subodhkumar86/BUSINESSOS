@@ -1,0 +1,30 @@
+---
+# cPanel Git Version Control deployment for BusinessOS.
+#
+# Runs when you click "Deploy HEAD Commit" in cPanel > Git Version Control and on every
+# push once the GitHub Actions workflow (.github/workflows/deploy-cpanel.yml) triggers
+# VersionControlDeployment::create. cPanel pulls the branch (--ff-only) first, then runs
+# these tasks in the repository directory.
+#
+# The account layout this file targets:
+#   repository / application root : /home/swadqgik/businessos
+#   .env (never committed)        : /home/swadqgik/businessos/.env
+# Change APPDIR below if the application root moves.
+deployment:
+  tasks:
+    # Node.js and npm come from the CloudLinux Node.js Selector virtualenv, not the
+    # deployment shell's PATH. Pick the newest installed interpreter for the account.
+    - export NODEBIN=$(ls -d /home/swadqgik/nodevenv/*/*/bin 2>/dev/null | /usr/bin/head -n1)
+    - export PATH=$NODEBIN:$PATH
+    - export APPDIR=/home/swadqgik/businessos
+    - cd $APPDIR
+    - $NODEBIN/node --version
+    # Dependencies (runtime + build tools) and the React production build.
+    - npm install --include=dev --no-audit --no-fund
+    - npm run build
+    # Versioned PostgreSQL migrations; the API never migrates on startup.
+    - npm run db:migrate
+    # Passive restart for the Node.js application process.
+    - /bin/mkdir -p $APPDIR/tmp
+    - /bin/touch $APPDIR/tmp/restart.txt
+    - echo "BusinessOS deploy finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -59,7 +59,7 @@ The same role aliases are seeded for `northstar.demo` and `greenfield.demo`. Ove
 
 Alternatively, `docker compose --profile app up --build -d` starts the API with PostgreSQL and Redis; run `npm.cmd run dev` for the frontend.
 
-Local Compose credentials are development-only, bound to loopback. Production must supply managed secrets, TLS, `COOKIE_SECURE=true`, explicit origins and appropriate network controls. Use the non-superuser `businessos_app` database role, not the PostgreSQL administrator. The API startup does not run migrations automatically except in the explicitly configured local Compose command. See [PRODUCTION.md](PRODUCTION.md) for the deployment checklist.
+Local Compose credentials are development-only, bound to loopback. Production must supply managed secrets, TLS, `COOKIE_SECURE=true`, explicit origins and appropriate network controls. Use the non-superuser `businessos_app` database role, not the PostgreSQL administrator. The API startup does not run migrations automatically except in the explicitly configured local Compose command. See [PRODUCTION.md](PRODUCTION.md) for the deployment checklist and [CPANEL.md](CPANEL.md) for a shared-hosting cPanel walkthrough (`app.cjs` plus the `scripts/cpanel-*.cjs` helpers).
 
 ## What changed
 

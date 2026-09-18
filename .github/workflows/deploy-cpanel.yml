@@ -1,0 +1,64 @@
+name: Deploy to cPanel
+
+# Push to live: every push to main asks cPanel to pull the new commit and run the tasks
+# in .cpanel.yml (install, build, migrate, restart).
+#
+# One-time setup (GitHub > Settings > Secrets and variables > Actions > New repository secret):
+#   CPANEL_HOST  business122.web-hosting.com
+#   CPANEL_USER  swadqgik
+#   CPANEL_TOKEN a cPanel API token created in cPanel > Security > Manage API Tokens
+#
+# Until those three secrets exist this workflow reports a notice and exits successfully,
+# so pushes are never marked as failed for a missing deployment target.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cpanel
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+      CPANEL_USER: ${{ secrets.CPANEL_USER }}
+      CPANEL_TOKEN: ${{ secrets.CPANEL_TOKEN }}
+      # Repository path shown in cPanel > Git Version Control > Repository Path.
+      CPANEL_REPO_PATH: /home/swadqgik/businessos
+    steps:
+      - name: Check deployment credentials
+        id: credentials
+        run: |
+          if [ -z "${CPANEL_HOST}" ] || [ -z "${CPANEL_USER}" ] || [ -z "${CPANEL_TOKEN}" ]; then
+            echo "::notice::Deployment skipped: add the CPANEL_HOST, CPANEL_USER and CPANEL_TOKEN repository secrets to enable push-to-live."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger cPanel deployment
+        if: steps.credentials.outputs.ready == 'true'
+        env:
+          REPO_PATH: ${{ env.CPANEL_REPO_PATH }}
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --header "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            --get --data-urlencode "repository_root=${REPO_PATH}" \
+            "https://${CPANEL_HOST}:2083/execute/VersionControlDeployment/create")
+          echo "$response"
+          if ! printf '%s' "$response" | grep -q '"status":1'; then
+            echo "::error::cPanel refused the deployment. Check the response above and the last deployment log in cPanel > Git Version Control."
+            exit 1
+          fi
+          log_path=$(printf '%s' "$response" | sed -n 's/.*"log_path":"\([^"]*\)".*/\1/p')
+          echo "::notice::Deployment queued. Server log: ${log_path:-see cPanel > Git Version Control > Last Deployment}"
+          echo "The app builds, migrates and restarts on the server. Verify https://demo.businessos.swad.cloud/api/v1/health once the task finishes."

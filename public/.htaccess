@@ -1,0 +1,9 @@
+# Document root for the BusinessOS subdomain.
+#
+# The Node.js application root sits one level above this folder, so the server, the
+# TypeScript sources, .env and node_modules are never reachable over HTTP.
+Options -Indexes
+IndexIgnore *
+
+# Defense in depth: refuse source, secrets and deployment artefacts if one ever appears here.
+RedirectMatch 404 (?i)/(\.env(\..*)?|\.git(/|$)|node_modules(/|$)|server(/|$)|src(/|$)|scripts(/|$)|package(-lock)?\.json|tsconfig\.json|.*\.(log|sql|zip|ts|tsx)$)
