@@ -13,4 +13,4 @@ CREATE POLICY document_comments_scope ON document_comments
   USING(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
   WITH CHECK(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 CREATE TRIGGER document_comments_immutable BEFORE UPDATE OR DELETE ON document_comments
-  FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+  FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();

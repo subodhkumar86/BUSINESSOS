@@ -141,6 +141,58 @@ async function body(req: IncomingMessage, maxBytes = 32768): Promise<unknown> {
     return fail(400, 'Invalid JSON.')
   }
 }
+
+// Shared hosting providers commonly block outbound Redis TCP connections. This
+// opt-in fallback keeps a demo usable in that environment; production should
+// use a real Redis service whenever outbound TCP is available.
+class MemoryRedis {
+  private values = new Map<string, { value: string; expiresAt?: number }>()
+  isOpen = false
+
+  on(_event: string, _listener: (error: unknown) => void) {
+    return this
+  }
+  async connect() {
+    this.isOpen = true
+  }
+  async quit() {
+    this.isOpen = false
+  }
+  private entry(key: string) {
+    const item = this.values.get(key)
+    if (item?.expiresAt && item.expiresAt <= Date.now()) {
+      this.values.delete(key)
+      return undefined
+    }
+    return item
+  }
+  async set(key: string, value: string, options?: { EX?: number }) {
+    this.values.set(key, {
+      value,
+      expiresAt: options?.EX ? Date.now() + options.EX * 1000 : undefined,
+    })
+    return 'OK'
+  }
+  async get(key: string) {
+    return this.entry(key)?.value ?? null
+  }
+  async del(...keys: string[]) {
+    return keys.reduce((count, key) => count + Number(this.values.delete(key)), 0)
+  }
+  async ping() {
+    return 'PONG'
+  }
+  async eval(
+    _script: string,
+    input: { keys: string[]; arguments: string[] },
+  ) {
+    const key = input.keys[0]
+    const current = Number(this.entry(key)?.value || 0) + 1
+    await this.set(key, String(current), { EX: 60 })
+    return current
+  }
+}
+
 export async function createApp(config: {
   databaseUrl: string
   redisUrl: string
@@ -151,14 +203,22 @@ export async function createApp(config: {
   staticDir?: string
 }) {
   const store = new Store(config.databaseUrl),
-    redis = createClient({
-      url: config.redisUrl,
-      socket: { connectTimeout: 5000, reconnectStrategy: false },
-    }),
+    redis =
+      process.env.REDIS_FALLBACK_MEMORY === 'true'
+        ? new MemoryRedis()
+        : createClient({
+            url: config.redisUrl,
+            socket: { connectTimeout: 5000, reconnectStrategy: false },
+          }),
     prefix = config.prefix || 'bos:'
   const cookieSameSite = config.sameSite || 'Strict'
-  redis.on('error', () =>
-    console.error(JSON.stringify({ event: 'redis_error' })),
+  redis.on('error', (error: unknown) =>
+    console.error(
+      JSON.stringify({
+        event: 'redis_error',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    ),
   )
   try {
     await redis.connect()

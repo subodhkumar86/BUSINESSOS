@@ -19,4 +19,4 @@ CREATE POLICY document_versions_scope ON document_versions
   USING(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
   WITH CHECK(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 CREATE TRIGGER document_versions_immutable BEFORE UPDATE OR DELETE ON document_versions
-  FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+  FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();

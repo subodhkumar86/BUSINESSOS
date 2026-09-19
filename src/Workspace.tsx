@@ -266,6 +266,7 @@ export default function Workspace() {
                   : 'Sign in'}
           </button>
         </form>
+        <div className="auth-links">
         {!recover && (
           <button
             className="text-button"
@@ -290,6 +291,7 @@ export default function Workspace() {
         >
           {recover ? 'Back to sign in' : 'Forgot password?'}
         </button>
+        </div>
         <hr />
         {recover && (
           <button
@@ -302,9 +304,10 @@ export default function Workspace() {
             I already have a reset code
           </button>
         )}
-        <button
-          onClick={() => {
-            setDemo(true)
+        <div className="auth-demo-actions">
+          <button
+            onClick={() => {
+              setDemo(true)
             setError('')
           }}
         >
@@ -320,6 +323,7 @@ export default function Workspace() {
         >
           ← Back to BusinessOS Website
         </button>
+        </div>
         <small>
           The demo stays in this browser. It is never uploaded automatically.
         </small>

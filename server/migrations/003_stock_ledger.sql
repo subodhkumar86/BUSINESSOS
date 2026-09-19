@@ -13,7 +13,7 @@ CREATE TABLE stock_movements (
   CHECK(value_delta = quantity_delta * unit_cost)
 );
 CREATE INDEX stock_movements_tenant_product ON stock_movements(tenant_id,product_id,occurred_at DESC);
-CREATE TRIGGER stock_movements_immutable BEFORE UPDATE OR DELETE ON stock_movements FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+CREATE TRIGGER stock_movements_immutable BEFORE UPDATE OR DELETE ON stock_movements FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();
 ALTER TABLE stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_movements FORCE ROW LEVEL SECURITY;
 CREATE POLICY stock_movement_scope ON stock_movements

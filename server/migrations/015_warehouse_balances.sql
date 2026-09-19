@@ -25,7 +25,7 @@ CREATE POLICY warehouse_movements_scope ON warehouse_movements
   USING(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
   WITH CHECK(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 CREATE TRIGGER warehouse_movements_immutable BEFORE UPDATE OR DELETE ON warehouse_movements
-  FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+  FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();
 
 ALTER TABLE stock_transfers ADD COLUMN request_key uuid;
 CREATE UNIQUE INDEX transfers_request ON stock_transfers(tenant_id,request_key);

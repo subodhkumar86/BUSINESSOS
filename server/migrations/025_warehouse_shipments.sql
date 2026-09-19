@@ -34,4 +34,4 @@ CREATE POLICY shipment_request_scope ON shipment_requests
  USING(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
  WITH CHECK(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 CREATE TRIGGER shipment_requests_immutable BEFORE UPDATE OR DELETE ON shipment_requests
- FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+ FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();

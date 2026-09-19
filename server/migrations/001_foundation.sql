@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS requests(tenant_id uuid NOT NULL REFERENCES tenants(i
 CREATE INDEX IF NOT EXISTS audit_tenant ON audit(tenant_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS journals_tenant ON journals(tenant_id,created_at DESC);
 CREATE OR REPLACE FUNCTION reject_ledger_change() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Posted ledger records are append-only'; END $$;
-CREATE TRIGGER audit_immutable BEFORE UPDATE OR DELETE ON audit FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
-CREATE TRIGGER journals_immutable BEFORE UPDATE OR DELETE ON journals FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+CREATE TRIGGER audit_immutable BEFORE UPDATE OR DELETE ON audit FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();
+CREATE TRIGGER journals_immutable BEFORE UPDATE OR DELETE ON journals FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_scope ON tenants USING(id=nullif(current_setting('app.tenant_id',true),'')::uuid) WITH CHECK(id=nullif(current_setting('app.tenant_id',true),'')::uuid);

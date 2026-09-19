@@ -19,4 +19,4 @@ CREATE POLICY documents_scope ON documents
   USING(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
   WITH CHECK(tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
 CREATE TRIGGER documents_immutable_delete_guard BEFORE DELETE ON documents
-  FOR EACH ROW EXECUTE FUNCTION reject_ledger_change();
+  FOR EACH ROW EXECUTE PROCEDURE reject_ledger_change();
