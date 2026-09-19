@@ -8,8 +8,7 @@ name: Deploy to cPanel
 #   CPANEL_USER  swadqgik
 #   CPANEL_TOKEN a cPanel API token created in cPanel > Security > Manage API Tokens
 #
-# Until those three secrets exist this workflow reports a notice and exits successfully,
-# so pushes are never marked as failed for a missing deployment target.
+# The first deployment needs a dedicated cPanel token stored as a GitHub Action secret.
 
 on:
   push:
@@ -32,14 +31,15 @@ jobs:
       CPANEL_USER: ${{ secrets.CPANEL_USER }}
       CPANEL_TOKEN: ${{ secrets.CPANEL_TOKEN }}
       # Repository path shown in cPanel > Git Version Control > Repository Path.
-      CPANEL_REPO_PATH: /home/swadqgik/businessos
+      CPANEL_REPO_PATH: /home/swadqgik/businessos-production
+      HEALTHCHECK_URL: https://demo.businessos.swad.cloud/api/v1/health
     steps:
       - name: Check deployment credentials
         id: credentials
         run: |
           if [ -z "${CPANEL_HOST}" ] || [ -z "${CPANEL_USER}" ] || [ -z "${CPANEL_TOKEN}" ]; then
-            echo "::notice::Deployment skipped: add the CPANEL_HOST, CPANEL_USER and CPANEL_TOKEN repository secrets to enable push-to-live."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Deployment is not configured. Add CPANEL_HOST, CPANEL_USER and CPANEL_TOKEN under GitHub Settings > Secrets and variables > Actions."
+            exit 1
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
@@ -61,4 +61,18 @@ jobs:
           fi
           log_path=$(printf '%s' "$response" | sed -n 's/.*"log_path":"\([^"]*\)".*/\1/p')
           echo "::notice::Deployment queued. Server log: ${log_path:-see cPanel > Git Version Control > Last Deployment}"
-          echo "The app builds, migrates and restarts on the server. Verify https://demo.businessos.swad.cloud/api/v1/health once the task finishes."
+      - name: Verify live health endpoint
+        if: steps.credentials.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            response=$(curl --silent --show-error --max-time 15 "${HEALTHCHECK_URL}" || true)
+            if printf '%s' "$response" | grep -q '"ok":true'; then
+              echo "Live health check passed."
+              exit 0
+            fi
+            echo "Waiting for cPanel deployment/restart ($attempt/18)..."
+            sleep 10
+          done
+          echo "::error::Deployment trigger succeeded but the health endpoint did not become ready. Check cPanel > Git Version Control > Last Deployment and stderr.log."
+          exit 1
