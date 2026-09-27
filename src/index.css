@@ -1619,6 +1619,37 @@ tbody tr:last-child td {
   font-size: 0.95rem;
 }
 
+.capability-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.55rem;
+  margin: 2rem auto 0;
+  max-width: 48rem;
+}
+
+.capability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border-default);
+  border-radius: 9999px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  padding: 0.38rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+}
+
+.capability-chip svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+  color: var(--success-dot);
+}
+
 /* Feature Grid */
 .pillars-grid, .module-cards-grid, .pricing-grid {
   margin: 0 auto;
