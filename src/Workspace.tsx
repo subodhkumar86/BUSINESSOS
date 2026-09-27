@@ -119,6 +119,7 @@ export default function Workspace() {
             {demo ? 'Exit demo' : 'Sign out'}
           </button>
         </div>
+        </div>
         <App
           key={snapshot?.user.id || 'demo'}
           remote={snapshot}
