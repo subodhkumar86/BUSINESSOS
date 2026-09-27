@@ -24,7 +24,15 @@ interface Interaction {
 const demoCustomerKey = 'businessos-demo-customers'
 const demoInteractionKey = 'businessos-demo-customer-interactions'
 export function Customers({ remote }: { remote: Snapshot | null }) {
-  const [customers, setCustomers] = useState<Customer[]>([])
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    if (remote) return []
+    try {
+      const saved = JSON.parse(localStorage.getItem(demoCustomerKey) || '[]')
+      return Array.isArray(saved) ? saved : []
+    } catch {
+      return []
+    }
+  })
   const [selected, setSelected] = useState<Customer | null>(null)
   const [history, setHistory] = useState<Interaction[]>([])
   const [search, setSearch] = useState('')
@@ -35,15 +43,8 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
   const [revision, setRevision] = useState(0)
   const editable = !remote || ['owner', 'sales_crm_user'].includes(remote.user.role)
   useEffect(() => {
+    if (!remote) return
     let active = true
-    if (!remote) {
-      try {
-        const saved = JSON.parse(localStorage.getItem(demoCustomerKey) || '[]')
-        if (active) setCustomers(Array.isArray(saved) ? saved : [])
-      } catch { if (active) setCustomers([]) }
-      setBusy(false)
-      return
-    }
     request<{ customers: Customer[] }>('/crm/customers')
       .then((data) => {
         if (active) setCustomers(data.customers)
@@ -62,12 +63,16 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
     let active = true
     if (!selected) return
     if (!remote) {
-      try {
-        const saved = JSON.parse(localStorage.getItem(demoInteractionKey) || '{}')
-        if (active) setHistory(Array.isArray(saved[selected.id]) ? saved[selected.id] : [])
-      } catch { if (active) setHistory([]) }
-      if (active) setLoadingHistory(false)
-      return
+      const timer = setTimeout(() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem(demoInteractionKey) || '{}')
+          setHistory(Array.isArray(saved[selected.id]) ? saved[selected.id] : [])
+        } catch {
+          setHistory([])
+        }
+        setLoadingHistory(false)
+      }, 0)
+      return () => clearTimeout(timer)
     }
     request<{ interactions: Interaction[] }>(
       `/crm/customers/${selected.id}/interactions`,
@@ -84,7 +89,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
     return () => {
       active = false
     }
-  }, [selected, revision])
+  }, [selected, revision, remote])
   async function save(form: HTMLFormElement, interaction = false) {
     if (busy) return
     const values = Object.fromEntries(new FormData(form))
@@ -139,8 +144,15 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
     }
   }
   return (
-    <section className="panel operations-panel">
-      <h2>Customers & interaction history</h2>
+    <section className="panel operations-panel customers-panel">
+      <div className="section-top customers-heading">
+        <div>
+          <p className="eyebrow">Customer relationship management</p>
+          <h2>Customers & interaction history</h2>
+          <p>Keep contact details, consent and follow-ups together in one reliable customer record.</p>
+        </div>
+        <span className="customers-count"><b>{customers.length}</b> customers</span>
+      </div>
       {error && (
         <p role="alert">
           {error}{' '}
@@ -156,69 +168,76 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
-      <label>
-        Search customers
-        <input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </label>
-      {busy && <p role="status">Loading data...</p>}
-      {!busy && !customers.length && (
-        <p>No records yet. Add your first customer to get started.</p>
-      )}
-      <table>
-        <thead>
-          <tr>
-            <th>Customer</th>
-            <th>Email</th>
-            <th>Phone</th>
-            <th>Status</th>
-            <th>Marketing</th>
-            <th>Profile</th>
-          </tr>
-        </thead>
-        <tbody>
-          {customers
-            .filter((customer) =>
-              `${customer.name} ${customer.email} ${customer.phone}`
-                .toLowerCase()
-                .includes(search.toLowerCase()),
-            )
-            .map((customer) => (
-              <tr key={customer.id}>
-                <td>{customer.name}</td>
-                <td>{customer.email || '—'}</td>
-                <td>{customer.phone || '—'}</td>
-                <td>{customer.status}</td>
-                <td>{customer.marketing_opt_in ? 'Opted in' : 'No consent'}</td>
-                <td>
-                  <button
-                    disabled={busy}
-                    onClick={() => {
-                      setHistory([])
-                      setLoadingHistory(true)
-                      setSelected(customer)
-                      setError('')
-                      setNotice('')
-                    }}
-                  >
-                    Open {customer.name}
-                  </button>
-                </td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
+      <div className="operations-fields customers-search">
+        <label>
+          Search customers
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+      </div>
+      {busy && <p role="status" className="empty">Loading customer data...</p>}
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Email</th>
+              <th>Phone</th>
+              <th>Status</th>
+              <th>Marketing</th>
+              <th>Profile</th>
+            </tr>
+          </thead>
+          <tbody>
+            {customers
+              .filter((customer) =>
+                `${customer.name} ${customer.email} ${customer.phone}`
+                  .toLowerCase()
+                  .includes(search.toLowerCase()),
+              )
+              .map((customer) => (
+                <tr key={customer.id}>
+                  <td>{customer.name}</td>
+                  <td>{customer.email || '—'}</td>
+                  <td>{customer.phone || '—'}</td>
+                  <td><span className={`badge ${customer.status === 'active' ? 'green' : 'amber'}`}>{customer.status}</span></td>
+                  <td><span className={`badge ${customer.marketing_opt_in ? 'green' : ''}`}>{customer.marketing_opt_in ? 'Opted in' : 'No consent'}</span></td>
+                  <td className="table-actions">
+                    <button
+                      disabled={busy}
+                      onClick={() => {
+                        setHistory([])
+                        setLoadingHistory(true)
+                        setSelected(customer)
+                        setError('')
+                        setNotice('')
+                      }}
+                    >
+                      Open {customer.name}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+        {!busy && !customers.length && (
+          <p className="empty">No records yet. Add your first customer to get started.</p>
+        )}
+      </div>
       {selected && (
         <>
-          <h3>{selected.name}</h3>
-          <p>{selected.address || 'No address recorded.'}</p>
-          <p>Tax reference: {selected.tax_reference || 'Not recorded'}</p>
-          <button onClick={() => setSelected(null)}>
-            Close profile / add customer
-          </button>
+          <div className="customer-profile">
+            <div>
+              <p className="eyebrow">Selected profile</p>
+              <h3>{selected.name}</h3>
+              <p>{selected.address || 'No address recorded.'}</p>
+              <p>Tax reference: {selected.tax_reference || 'Not recorded'}</p>
+            </div>
+            <button onClick={() => setSelected(null)}>Close profile / add customer</button>
+          </div>
         </>
       )}
       {editable && (
@@ -229,7 +248,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
             void save(event.currentTarget)
           }}
         >
-          <fieldset disabled={busy} className="operations-fields">
+          <fieldset disabled={busy} className="operations-fields customer-form">
             <legend>{selected ? 'Edit customer' : 'Add customer'}</legend>
             <label>
               Name
@@ -291,16 +310,16 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
           {loadingHistory ? (
             <p role="status">Loading interactions...</p>
           ) : !history.length ? (
-            <p>No interactions recorded.</p>
+            <p className="empty">No interactions recorded.</p>
           ) : (
-            <ul>
+            <ul className="space-y-3">
               {history.map((item) => (
-                <li key={item.id}>
+                <li key={item.id} className="card !p-4">
                   <strong>{item.kind}</strong> ·{' '}
-                  {new Date(item.occurred_at).toLocaleString()} · {item.actor}
-                  <p>{item.summary}</p>
+                  <span className="muted">{new Date(item.occurred_at).toLocaleString()} · {item.actor}</span>
+                  <p className="mt-2 text-sm">{item.summary}</p>
                   {item.follow_up_on && (
-                    <p>Follow up: {item.follow_up_on.slice(0, 10)}</p>
+                    <p className="mt-2 text-xs font-semibold text-brand-700">Follow up: {item.follow_up_on.slice(0, 10)}</p>
                   )}
                 </li>
               ))}

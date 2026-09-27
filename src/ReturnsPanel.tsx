@@ -10,8 +10,16 @@ export function ReturnsPanel({
   remote: Snapshot | null
   onRefresh: () => Promise<void>
 }) {
-  const [rows, setRows] = useState<ShipmentReturn[]>([]),
-    [shipments, setShipments] = useState<Shipment[]>([]),
+  const [rows, setRows] = useState<ShipmentReturn[]>(() => {
+    if (remote) return []
+    const now = new Date().toISOString()
+    return [{ id: 'demo-return-1', shipment_id: 'demo-return-shipment', order_ref: 'SO-DEMO-1000', customer: 'Demo customer', product_name: 'Demo inventory item', quantity: 1, reason: 'Demo customer return', destination_location_id: null, destination_location_name: null, status: 'inspecting', condition: null, inspection_notes: '', version: 1, stock_movement_id: null, created_at: now }]
+  }),
+    [shipments, setShipments] = useState<Shipment[]>(() => {
+      if (remote) return []
+      const now = new Date().toISOString()
+      return [{ id: 'demo-return-shipment', order_ref: 'SO-DEMO-1000', customer: 'Demo customer', product_id: 'demo-product', product_name: 'Demo inventory item', quantity: 1, source_location_id: null, source_location_name: null, status: 'dispatched', version: 1, stock_movement_id: 'DEMO-DISPATCHED', dispatched_at: now, created_at: now }]
+    }),
     [locations, setLocations] = useState<
       { id: string; name: string; status: string }[]
     >([]),
@@ -27,13 +35,7 @@ export function ReturnsPanel({
     remote && ['owner', 'operations_manager'].includes(remote.user.role),
   )
   useEffect(() => {
-    if (!remote) {
-      const now = new Date().toISOString()
-      setShipments([{ id: 'demo-return-shipment', order_ref: 'SO-DEMO-1000', customer: 'Demo customer', product_id: 'demo-product', product_name: 'Demo inventory item', quantity: 1, source_location_id: null, source_location_name: null, status: 'dispatched', version: 1, stock_movement_id: 'DEMO-DISPATCHED', dispatched_at: now, created_at: now }])
-      setRows([{ id: 'demo-return-1', shipment_id: 'demo-return-shipment', order_ref: 'SO-DEMO-1000', customer: 'Demo customer', product_name: 'Demo inventory item', quantity: 1, reason: 'Demo customer return', destination_location_id: null, destination_location_name: null, status: 'inspecting', condition: null, inspection_notes: '', version: 1, stock_movement_id: null, created_at: now }])
-      setLocations([]); setLoading(false)
-      return
-    }
+    if (!remote) return
     let active = true
     Promise.all([
       request<{ returns: ShipmentReturn[] }>('/warehouse/shipment-returns'),
@@ -136,7 +138,7 @@ export function ReturnsPanel({
     rows.filter((row) => row.status === status).length
   const awaitingDecision = count('inspecting') + count('inspected')
   return (
-    <section className="panel">
+    <section className="panel returns-panel">
       <div className="section-top">
         <div>
           <h2>Returns and inspection</h2>
@@ -165,7 +167,7 @@ export function ReturnsPanel({
       )}
       {editable && (
         <form
-          className="operations-fields"
+          className="operations-fields returns-create"
           onSubmit={async (event) => {
             event.preventDefault()
             const form = event.currentTarget,
@@ -230,7 +232,7 @@ export function ReturnsPanel({
           </button>
         </form>
       )}
-      <div className="operations-fields">
+      <div className="operations-fields returns-filters">
         <label>
           Return status
           <select
@@ -257,7 +259,7 @@ export function ReturnsPanel({
         <p role="status">Loading returns...</p>
       ) : visible.length ? (
         visible.map((row) => (
-          <article className="card" key={row.id}>
+          <article className="card return-record" key={row.id}>
             <div className="section-top">
               <h3>{row.order_ref} · {row.product_name}</h3>
               <span className={row.status === 'restocked' ? 'badge green' : row.status === 'closed_damaged' ? 'badge red' : 'badge'}>{row.status.replaceAll('_', ' ')}</span>

@@ -178,7 +178,7 @@ export function SuppliersPanel({
     : 0
 
   return (
-    <div className="module-panel">
+    <div className="module-panel suppliers-panel">
       {/* Metrics Banner */}
       <div className="stats-row">
         <div className="stat-card">

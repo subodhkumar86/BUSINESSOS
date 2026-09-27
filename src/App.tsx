@@ -33,6 +33,8 @@ import type {
 import { request, saveAction, ApiError } from './api'
 import { Team } from './Team'
 import { ConnectorsPanel } from './ConnectorsPanel'
+import { useTheme } from './theme'
+import { CommandPalette } from './CommandPalette'
 
 function LeadScorePanel({ remote, state }: { remote: import('./types').Snapshot; state: import('./types').State }) {
   const [scores, setScores] = useState<{ leadId: string; name: string; status: string; score: number }[]>([])
@@ -237,19 +239,38 @@ function App({
     [question, setQuestion] = useState(''),
     [answer, setAnswer] = useState(''),
     [aiLineage, setAiLineage] = useState(''),
-    [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]),
-    [selectedBankAccountId, setSelectedBankAccountId] = useState(''),
+    [bankAccounts, setBankAccounts] = useState<BankAccount[]>(() => {
+      if (remote) return []
+      return [{ id: 'demo-bank-main', provider: 'manual', external_ref: 'DEMO-001', name: 'BusinessOS Demo Operating Account', currency: loaded.data.currency, status: 'active', created_at: new Date().toISOString() }]
+    }),
+    [selectedBankAccountId, setSelectedBankAccountId] = useState(() => remote ? '' : 'demo-bank-main'),
     [bankStatusFilter, setBankStatusFilter] = useState<'all' | BankTransaction['match_status']>('all'),
     [manualMatches, setManualMatches] = useState<Record<string, string>>({}),
-    [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]),
+    [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(() => {
+      if (remote) return []
+      return loaded.data.invoices.filter((invoice) => invoice.status === 'Unpaid').slice(0, 3).map((invoice, index) => ({ id: `demo-bank-${invoice.id}`, external_ref: `DEMO-STMT-${index + 1}`, occurred_at: new Date().toISOString(), amount: invoice.amount, direction: 'credit', reference: `Customer payment expected - ${invoice.name}`, match_status: 'suggested', matched_entity_type: 'invoice', matched_entity_id: invoice.id, reconciled_at: null }))
+    }),
     [bankLoading, setBankLoading] = useState(false),
     [paymentBatches, setPaymentBatches] = useState<Record<string, PayrollPaymentBatch>>({}),
     [auditLogs, setAuditLogs] = useState<Audit[]>([])
   const saving = useRef(false),
     [busy, setBusy] = useState(false)
   const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null)
+  const { theme, toggleTheme, isDark } = useTheme()
+  const [cmdOpen, setCmdOpen] = useState(false)
   const effectiveRole: UserRole = simulatedRole || remote?.user.role || 'owner'
   const readOnly = effectiveRole === 'auditor'
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCmdOpen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
   const m = metrics(s),
     money = (v: unknown) =>
       new Intl.NumberFormat('en-NG', {
@@ -289,18 +310,11 @@ function App({
     return () => window.removeEventListener('popstate', listener)
   }, [])
   useEffect(() => {
+    if (!remote) return
     if ((page !== 'finance' && page !== 'banking') || !['owner', 'finance_admin', 'auditor'].includes(effectiveRole))
       return
-    if (!remote) {
-      if (!bankAccounts.length) {
-        const account: BankAccount = { id: 'demo-bank-main', provider: 'manual', external_ref: 'DEMO-001', name: 'BusinessOS Demo Operating Account', currency: s.currency, status: 'active', created_at: new Date().toISOString() }
-        const transactions: BankTransaction[] = s.invoices.filter((invoice) => invoice.status === 'Unpaid').slice(0, 3).map((invoice, index) => ({ id: `demo-bank-${invoice.id}`, external_ref: `DEMO-STMT-${index + 1}`, occurred_at: new Date().toISOString(), amount: invoice.amount, direction: 'credit', reference: `Customer payment expected - ${invoice.name}`, match_status: 'suggested', matched_entity_type: 'invoice', matched_entity_id: invoice.id, reconciled_at: null }))
-        setBankAccounts([account]); setSelectedBankAccountId(account.id); setBankTransactions(transactions)
-      }
-      return
-    }
     let active = true
-    setBankLoading(true)
+    queueMicrotask(() => { if (active) setBankLoading(true) })
     request<{ accounts: BankAccount[] }>('/banks/accounts')
       .then((data) => {
         if (!active) return
@@ -706,13 +720,29 @@ function App({
             <small>{remote ? 'Server workspace' : 'Local workspace'}</small>
           </div>
         </div>
+        <button
+          className="sidebar-search-btn"
+          onClick={() => setCmdOpen(true)}
+          title="Search or jump to (Ctrl+K or ⌘K)"
+          aria-label="Open command palette"
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <span>Quick search...</span>
+          </span>
+          <kbd>⌘K</kbd>
+        </button>
         <p className="nav-label">CORE WORKSPACES</p>
-        <nav>
+        <nav aria-label="Core workspaces">
           {visiblePages
             .filter(([, , , cat]) => cat === 'CORE')
             .map(([id, label]) => (
               <button
                 className={current === id ? 'active' : ''}
+                aria-current={current === id ? 'page' : undefined}
                 onClick={() => navigate(id)}
                 key={id}
               >
@@ -727,12 +757,13 @@ function App({
         {visiblePages.some(([, , , cat]) => cat === 'OPERATIONS') && (
           <>
             <p className="nav-label growth-label">OPERATIONS & SUPPLY</p>
-            <nav>
+            <nav aria-label="Operations and supply">
               {visiblePages
                 .filter(([, , , cat]) => cat === 'OPERATIONS')
                 .map(([id, label]) => (
                   <button
                     className={current === id ? 'active' : ''}
+                    aria-current={current === id ? 'page' : undefined}
                     onClick={() => navigate(id)}
                     key={id}
                   >
@@ -746,12 +777,13 @@ function App({
         {visiblePages.some(([, , , cat]) => cat === 'GROWTH') && (
           <>
             <p className="nav-label growth-label">GROWTH & COLLABORATION</p>
-            <nav>
+            <nav aria-label="Growth and collaboration">
               {visiblePages
                 .filter(([, , , cat]) => cat === 'GROWTH')
                 .map(([id, label]) => (
                   <button
                     className={current === id ? 'active' : ''}
+                    aria-current={current === id ? 'page' : undefined}
                     onClick={() => navigate(id)}
                     key={id}
                   >
@@ -765,12 +797,13 @@ function App({
         {visiblePages.some(([, , , cat]) => cat === 'GOVERNANCE' || cat === 'INTELLIGENCE' || cat === 'PLATFORM') && (
           <>
             <p className="nav-label growth-label">GOVERNANCE & PLATFORM</p>
-            <nav>
+            <nav aria-label="Governance and platform">
               {visiblePages
                 .filter(([, , , cat]) => cat === 'GOVERNANCE' || cat === 'INTELLIGENCE' || cat === 'PLATFORM')
                 .map(([id, label]) => (
                   <button
                     className={current === id ? 'active' : ''}
+                    aria-current={current === id ? 'page' : undefined}
                     onClick={() => navigate(id)}
                     key={id}
                   >
@@ -803,6 +836,20 @@ function App({
             <span className="breadcrumb-current">{pages.find((x) => x[0] === current)?.[1] || current}</span>
           </div>
           <div className="header-actions">
+            <button
+              className="cmd-trigger-btn"
+              onClick={() => setCmdOpen(true)}
+              title="Search modules & actions (Ctrl+K or ⌘K)"
+              aria-label="Open command palette"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" />
+              </svg>
+              <span className="hidden sm:inline">Search or jump to...</span>
+              <kbd>⌘K</kbd>
+            </button>
+
             {!remote ? (
               <div className="role-switcher-wrap" title="Preview the local demo as another role">
                 <span className="role-simulator-badge">DEMO ROLE</span>
@@ -827,8 +874,34 @@ function App({
             ) : (
               <span className="role-tag">{roleMatrix[effectiveRole].title}</span>
             )}
+
+            <button
+              className="theme-toggle-btn"
+              onClick={toggleTheme}
+              title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label="Toggle theme"
+            >
+              {isDark ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="5" />
+                  <line x1="12" y1="1" x2="12" y2="3" />
+                  <line x1="12" y1="21" x2="12" y2="23" />
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                  <line x1="1" y1="12" x2="3" y2="12" />
+                  <line x1="21" y1="12" x2="23" y2="12" />
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              )}
+            </button>
+
             <span className="local-tag">
-              {remote ? 'SERVER MVP' : 'LOCAL MVP'}
+              {remote ? 'SERVER' : 'DEMO'}
             </span>
             <NotificationsBell remote={remote} />
             <span className="avatar header-avatar" title={`Role: ${effectiveRole}`}>
@@ -2460,6 +2533,25 @@ function App({
           </div>
         </div>
       )}
+      <CommandPalette
+        isOpen={cmdOpen}
+        onClose={() => setCmdOpen(false)}
+        onNavigate={navigate}
+        onOpenCreateModal={(col) => setModal(col)}
+        onToggleTheme={toggleTheme}
+        isDark={isDark}
+        effectiveRole={effectiveRole}
+        canViewPage={canViewPage}
+        pages={pages}
+        onAskAi={() => {
+          navigate('ai')
+          setTimeout(() => {
+            const aiInput = document.querySelector('.ask input') as HTMLInputElement
+            if (aiInput) aiInput.focus()
+          }, 100)
+        }}
+        onExportCsv={csv}
+      />
     </div>
   )
 }

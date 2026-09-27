@@ -10,19 +10,20 @@ export function PasswordReset({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState('')
   const [complete, setComplete] = useState(false)
   return (
-    <div className="auth-shell">
-      <div className="auth-card">
+    <div className="auth-shell password-reset-shell">
+      <div className="auth-card password-reset-card">
         <div className="brand">
           <span className="logo">B</span>BusinessOS
         </div>
+        <p className="eyebrow">Account recovery</p>
         <h1>{complete ? 'Password updated' : 'Reset your password'}</h1>
         {complete ? (
-          <p role="status">
+          <p role="status" className="reset-complete">
             Your previous sessions have ended. Sign in with your new password.
           </p>
         ) : (
           <>
-            <p>
+            <p className="reset-intro">
               Enter your reset code and choose a new password. Codes expire
               after 30 minutes and can be used once.
             </p>
@@ -32,6 +33,7 @@ export function PasswordReset({ onBack }: { onBack: () => void }) {
               </p>
             )}
             <form
+              className="reset-form"
               onSubmit={async (event) => {
                 event.preventDefault()
                 if (busy) return

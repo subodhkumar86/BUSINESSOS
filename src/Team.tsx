@@ -53,9 +53,13 @@ export function Team({ csrf }: { csrf: string }) {
     }
   }
   return (
-    <section className="card">
-      <div className="section-top">
-        <h2>Team access</h2>
+    <section className="card team-panel">
+      <div className="section-top team-heading">
+        <div>
+          <p className="eyebrow">Workspace security</p>
+          <h2>Team access</h2>
+          <p>Invite people, assign the right role, and control account access from one place.</p>
+        </div>
         <button
           disabled={busy || loading}
           onClick={() => {
@@ -70,7 +74,7 @@ export function Team({ csrf }: { csrf: string }) {
         </button>
       </div>
       {loading ? (
-        <p role="status">Loading users...</p>
+        <p role="status" className="empty">Loading team members...</p>
       ) : (
         <div className="table-scroll">
           <table>
@@ -88,9 +92,9 @@ export function Team({ csrf }: { csrf: string }) {
                 <tr key={member.id}>
                   <td>{member.name}</td>
                   <td>{member.email}</td>
-                  <td>{roleLabel(member.role)}</td>
-                  <td>{member.active ? 'Active' : 'Disabled'}</td>
-                  <td>
+                  <td><span className="role-badge">{roleLabel(member.role)}</span></td>
+                  <td><span className={`badge ${member.active ? 'green' : 'red'}`}>{member.active ? 'Active' : 'Disabled'}</span></td>
+                  <td className="table-actions">
                     {member.role !== 'owner' ? (
                       <button
                         disabled={busy}
@@ -106,85 +110,89 @@ export function Team({ csrf }: { csrf: string }) {
               ))}
             </tbody>
           </table>
-          {!members.length && !error && <p>No users found.</p>}
+          {!members.length && !error && <p className="empty">No users found.</p>}
         </div>
       )}
       {error && (
-        <p className="alert" role="alert">
+        <p className="notice error" role="alert">
           {error}
         </p>
       )}
       {message && (
-        <p className="notice" role="status">
+        <p className="notice success" role="status">
           {message}
         </p>
       )}
-      <h3>Invite a team member</h3>
-      <p>Create an account for this workspace. No email is sent.</p>
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault()
-          if (busy) return
-          const form = e.currentTarget
-          setBusy(true)
-          setError('')
-          setMessage('')
-          try {
-            await request('/users', {
-              method: 'POST',
-              headers: { 'X-CSRF-Token': csrf },
-              body: JSON.stringify({
-                ...Object.fromEntries(new FormData(form)),
-                role: new FormData(form).get('role') as UserRole,
-              }),
-            })
-            form.reset()
-            await refresh()
-            setMessage(
-              'User profile created. Share the initial credentials through your secure channel.',
-            )
-          } catch (e) {
-            setError(
-              e instanceof Error ? e.message : 'Could not create account.',
-            )
-          } finally {
-            setBusy(false)
-          }
-        }}
-      >
-        <label>
-          Role
-          <select name="role" defaultValue="employee">
-            {userRoles.filter((role) => role !== 'owner' && role !== 'super_admin').map((role) => (
-              <option key={role} value={role}>
-                {roleLabel(role)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Name
-          <input required name="name" maxLength={200} />
-        </label>
-        <label>
-          Email
-          <input required name="email" type="email" />
-        </label>
-        <label>
-          Initial password
-          <input
-            required
-            name="password"
-            type="password"
-            minLength={12}
-            maxLength={128}
-            autoComplete="new-password"
-          />
-        </label>
-        <button disabled={busy} className="primary">
-          {busy ? 'Saving...' : 'Create account'}
-        </button>
-      </form>
+      <div className="team-invite mt-8 border-t border-slate-200 pt-6">
+        <p className="eyebrow">New account</p>
+        <h3>Invite a team member</h3>
+        <p className="muted mb-4">Create an account for this workspace. No email is sent.</p>
+        <form
+          className="inline-form team-invite-form"
+          onSubmit={async (e) => {
+            e.preventDefault()
+            if (busy) return
+            const form = e.currentTarget
+            setBusy(true)
+            setError('')
+            setMessage('')
+            try {
+              await request('/users', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrf },
+                body: JSON.stringify({
+                  ...Object.fromEntries(new FormData(form)),
+                  role: new FormData(form).get('role') as UserRole,
+                }),
+              })
+              form.reset()
+              await refresh()
+              setMessage(
+                'User profile created. Share the initial credentials through your secure channel.',
+              )
+            } catch (e) {
+              setError(
+                e instanceof Error ? e.message : 'Could not create account.',
+              )
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          <label>
+            Role
+            <select name="role" defaultValue="employee">
+              {userRoles.filter((role) => role !== 'owner' && role !== 'super_admin').map((role) => (
+                <option key={role} value={role}>
+                  {roleLabel(role)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Name
+            <input required name="name" maxLength={200} />
+          </label>
+          <label>
+            Email
+            <input required name="email" type="email" />
+          </label>
+          <label>
+            Initial password
+            <input
+              required
+              name="password"
+              type="password"
+              minLength={12}
+              maxLength={128}
+              autoComplete="new-password"
+            />
+          </label>
+          <button disabled={busy} className="primary">
+            {busy ? 'Saving...' : 'Create account'}
+          </button>
+        </form>
+      </div>
 
       <div style={{ marginTop: '2rem' }}>
         <RoleMatrix />

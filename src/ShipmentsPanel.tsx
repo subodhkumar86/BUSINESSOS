@@ -9,7 +9,10 @@ export function ShipmentsPanel({
   remote: Snapshot | null
   onRefresh: () => Promise<void>
 }) {
-  const [rows, setRows] = useState<Shipment[]>([]),
+  const [rows, setRows] = useState<Shipment[]>(() => {
+    if (remote) return []
+    return [{ id: 'demo-shipment-1', order_ref: 'SO-DEMO-1001', customer: 'Demo customer', product_id: 'demo-product', product_name: 'Demo inventory item', quantity: 2, source_location_id: null, source_location_name: null, status: 'picking', version: 1, stock_movement_id: null, dispatched_at: null, created_at: new Date().toISOString() }]
+  }),
     [locations, setLocations] = useState<
       { id: string; name: string; status: string }[]
     >([]),
@@ -26,12 +29,7 @@ export function ShipmentsPanel({
     remote && ['owner', 'operations_manager'].includes(remote.user.role),
   )
   useEffect(() => {
-    if (!remote) {
-      setRows([{ id: 'demo-shipment-1', order_ref: 'SO-DEMO-1001', customer: 'Demo customer', product_id: 'demo-product', product_name: 'Demo inventory item', quantity: 2, source_location_id: null, source_location_name: null, status: 'picking', version: 1, stock_movement_id: null, dispatched_at: null, created_at: new Date().toISOString() }])
-      setLocations([])
-      setLoading(false)
-      return
-    }
+    if (!remote) return
     let active = true
     Promise.all([
       request<{ shipments: Shipment[] }>('/warehouse/shipments'),

@@ -15,7 +15,9 @@ interface RFQ {
   version: number
 }
 
-const statusColors: Record<string, string> = { accepted: 'green', quoted: 'green' }
+const statusColors: Record<string, string> = {
+  accepted: 'green', quoted: 'green', sent: 'blue', draft: 'amber', rejected: 'red', expired: 'red',
+}
 
 export function RFQPanel({ remote }: { remote: Snapshot | null }) {
   const [rfqs, setRfqs] = useState<RFQ[]>([])
@@ -38,8 +40,15 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
   }
 
   return (
-    <section className="card">
-      <div className="section-top"><h2>Requests for Quotation (RFQ)</h2></div>
+    <section className="card rfq-panel">
+      <div className="section-top rfq-heading">
+        <div>
+          <p className="eyebrow">Procurement</p>
+          <h2>Requests for quotation</h2>
+          <p>Compare supplier responses and move approved quotes into purchasing.</p>
+        </div>
+        <span className="rfq-count"><b>{rfqs.length}</b> open records</span>
+      </div>
       {error && <div role="alert" className="alert">{error}</div>}
       {notice && <div role="status" className="notice">{notice}<button onClick={() => setNotice('')}>×</button></div>}
       <div className="table-scroll">
@@ -57,7 +66,7 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
                 <td>{r.required_by || '—'}</td>
                 <td>{money(r.quoted_amount)}</td>
                 <td><span className={`badge ${statusColors[r.status] || ''}`}>{r.status}</span></td>
-                <td>
+                <td className="table-actions">
                   {!readOnly && nextStatus(r.status) && (
                     <button
                       disabled={busy}
@@ -114,7 +123,7 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
       </div>
       {!readOnly && remote && (
         <form
-          className="inline-form"
+          className="inline-form rfq-create"
           onSubmit={async (e) => {
             e.preventDefault()
             setBusy(true)
@@ -142,11 +151,11 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
             }
           }}
         >
-          <input name="supplierName" placeholder="Supplier name" required />
-          <input name="productDescription" placeholder="Product / service description" required />
-          <input name="quantity" type="number" min="1" placeholder="Quantity" required />
-          <input name="requiredBy" type="date" aria-label="Required by date" />
-          <input name="notes" placeholder="Notes (optional)" />
+          <label>Supplier name<input name="supplierName" placeholder="e.g. Acme Supplies" required /></label>
+          <label>Product or service<input name="productDescription" placeholder="What do you need?" required /></label>
+          <label>Quantity<input name="quantity" type="number" min="1" placeholder="0" required /></label>
+          <label>Required by<input name="requiredBy" type="date" /></label>
+          <label>Notes<input name="notes" placeholder="Specifications or terms" /></label>
           <button className="primary" disabled={busy}>+ Send RFQ</button>
         </form>
       )}

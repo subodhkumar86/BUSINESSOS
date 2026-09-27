@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { request } from './api'
 import type { Snapshot } from './types'
 
@@ -30,12 +30,20 @@ export function AutomationPanel({ remote }: { remote: Snapshot | null }) {
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const editable = !remote || remote.user.role !== 'auditor'
   const headers: Record<string, string> = remote ? { 'X-CSRF-Token': remote.csrf } : {}
-  const load = useCallback(async () => {
+  useEffect(() => {
     if (!remote) return
-    try { const data = await request<{ records: Stored[] }>('/modules/automation'); setRules(data.records.map(storedRule).filter((item): item is Rule => Boolean(item))); setLogs(data.records.map(storedLog).filter((item): item is Log => Boolean(item))) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load automation.') }
+    let active = true
+    request<{ records: Stored[] }>('/modules/automation')
+      .then((data) => {
+        if (!active) return
+        setRules(data.records.map(storedRule).filter((item): item is Rule => Boolean(item)))
+        setLogs(data.records.map(storedLog).filter((item): item is Log => Boolean(item)))
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load automation.')
+      })
+    return () => { active = false }
   }, [remote])
-  useEffect(() => { void load() }, [load])
   useEffect(() => { if (!remote) localStorage.setItem(demoAutomationRulesKey, JSON.stringify(rules)) }, [rules, remote])
   useEffect(() => { if (!remote) localStorage.setItem(demoAutomationLogsKey, JSON.stringify(logs)) }, [logs, remote])
   const active = useMemo(() => rules.filter(rule => rule.status === 'active').length, [rules])
@@ -47,7 +55,7 @@ export function AutomationPanel({ remote }: { remote: Snapshot | null }) {
   }
   async function toggle(rule: Rule) { const status: Status = rule.status === 'active' ? 'paused' : 'active'; try { if (remote) await request('/modules/automation/' + rule.id, { method: 'PATCH', headers, body: JSON.stringify({ status }) }); setRules(current => current.map(item => item.id === rule.id ? { ...item, status } : item)); setNotice(`Workflow ${status}.`) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update workflow.') } }
   async function testRun(rule: Rule) { const log: Log = { id: 'local-log-' + crypto.randomUUID(), ruleName: rule.name, status: 'success', details: 'Manual evaluation completed. No external message or payment was dispatched.', createdAt: new Date().toISOString() }; try { if (remote) { const saved = await request<Stored>('/modules/automation', { method: 'POST', headers, body: JSON.stringify({ name: rule.name, detail: log.details, status: log.status, metadata: { kind: 'execution', ruleId: rule.id, manual: true } }) }); log.id = saved.id; log.createdAt = saved.created_at }; setLogs(current => [log, ...current]); setNotice('Test run recorded. It did not perform an external action.') } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not record test run.') } }
-  return <div className="module-panel">
+  return <div className="module-panel automation-panel">
     <div className="stats-row"><div className="stat-card"><span className="stat-label">Active workflows</span><b className="stat-value">{active}</b><small>Persisted rules</small></div><div className="stat-card"><span className="stat-label">Recorded runs</span><b className="stat-value">{logs.length}</b><small>Manual evaluation history</small></div><div className="stat-card"><span className="stat-label">Delivery</span><b className="stat-value">Review-only</b><small>External notifications are not configured</small></div></div>
     {notice && <p className="notice success" role="status">{notice}</p>}{error && <p className="notice error" role="alert">{error}</p>}
     {editable && <form className="card inline-form" onSubmit={createRule}><h2>Create workflow rule</h2><input value={name} onChange={e => setName(e.target.value)} placeholder="Rule name" maxLength={120} /><input value={trigger} onChange={e => setTrigger(e.target.value)} placeholder="Trigger condition" maxLength={500} /><input value={action} onChange={e => setAction(e.target.value)} placeholder="Review action" maxLength={500} /><select value={target} onChange={e => setTarget(e.target.value)}><option>Operations</option><option>Finance</option><option>CRM</option><option>Inventory</option><option>HR</option></select><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add workflow'}</button></form>}

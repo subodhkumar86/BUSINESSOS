@@ -27,15 +27,19 @@ export function Security({ csrf }: { csrf: string }) {
     }
   }
   return (
-    <section className="card">
-      <h2>Account security</h2>
-      <p>Changing your password signs you out on every device.</p>
+    <section className="card security-settings">
+      <div className="security-heading">
+        <p className="eyebrow">Account protection</p>
+        <h2>Account security</h2>
+        <p>Changing your password signs you out on every device.</p>
+      </div>
       {error && (
         <p className="alert" role="alert">
           {error}
         </p>
       )}
       <form
+        className="security-password-form"
         onSubmit={(e) => {
           e.preventDefault()
           const values = Object.fromEntries(new FormData(e.currentTarget))
@@ -85,15 +89,19 @@ export function Security({ csrf }: { csrf: string }) {
           {busy ? 'Please wait...' : 'Change password'}
         </button>
       </form>
-      <hr />
-      <h3>Sign out everywhere</h3>
-      <p>End every existing session, including this one.</p>
-      <button
-        disabled={busy}
-        onClick={() => void submit('/auth/revoke-sessions', {})}
-      >
-        Sign out all devices
-      </button>
+      <div className="security-danger-zone">
+        <div>
+          <p className="eyebrow">Session control</p>
+          <h3>Sign out everywhere</h3>
+          <p>End every existing session, including this one.</p>
+        </div>
+        <button
+          disabled={busy}
+          onClick={() => void submit('/auth/revoke-sessions', {})}
+        >
+          Sign out all devices
+        </button>
+      </div>
     </section>
   )
 }

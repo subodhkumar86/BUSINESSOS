@@ -4,7 +4,9 @@ import { Marketing } from './Marketing'
 import { PasswordReset } from './PasswordReset'
 import { request, ApiError } from './api'
 import type { Snapshot } from './types'
+import { useTheme } from './theme'
 export default function Workspace() {
+  const { theme, toggleTheme, isDark } = useTheme()
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [demo, setDemo] = useState(false),
     [loading, setLoading] = useState(true),
@@ -95,13 +97,18 @@ export default function Workspace() {
   if (loading)
     return (
       <div className="auth-shell">
-        <p role="status">Connecting to your workspace…</p>
+        <div style={{ textAlign: 'center', display: 'grid', gap: '0.85rem', placeItems: 'center' }}>
+          <div className="logo" style={{ width: '3.25rem', height: '3.25rem', fontSize: '1.4rem', borderRadius: '14px' }}>B</div>
+          <p role="status" style={{ fontWeight: 600, fontSize: '0.92rem' }}>Connecting to your BusinessOS workspace…</p>
+        </div>
       </div>
     )
   if (snapshot || demo)
     return (
       <>
         <div className="session-bar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <span className="logo" style={{ width: '1.4rem', height: '1.4rem', fontSize: '0.75rem', borderRadius: '6px' }}>B</span>
           <span>
             {demo
               ? 'Browser demo'
@@ -136,7 +143,46 @@ export default function Workspace() {
   }
 
   return (
-    <div className="auth-shell">
+    <div className="auth-shell auth-split">
+      <aside className="auth-panel" aria-hidden="true">
+        <div className="auth-brand">
+          <span className="logo">B</span>BusinessOS
+        </div>
+        <div>
+          <h2>Run the whole business from one place.</h2>
+          <p>
+            Finance, inventory, people and customer operations connected in a
+            single workspace — with the audit trail to back every decision.
+          </p>
+          <div className="auth-points">
+            <div className="auth-point">
+              <span className="auth-point-mark">1</span>
+              <div>
+                <b>See what needs attention</b>
+                <span>Cash, receivables, stock and pipeline on one dashboard.</span>
+              </div>
+            </div>
+            <div className="auth-point">
+              <span className="auth-point-mark">2</span>
+              <div>
+                <b>Keep control of access</b>
+                <span>Role-based permissions with read-only auditor accounts.</span>
+              </div>
+            </div>
+            <div className="auth-point">
+              <span className="auth-point-mark">3</span>
+              <div>
+                <b>Trace every change</b>
+                <span>Posted journals and audit events retain their source.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p className="auth-footnote">
+          BusinessOS records and coordinates business workflows. It does not hold
+          funds or guarantee statutory tax compliance.
+        </p>
+      </aside>
       <div className="auth-card">
         <div className="brand">
           <span className="logo">B</span>BusinessOS

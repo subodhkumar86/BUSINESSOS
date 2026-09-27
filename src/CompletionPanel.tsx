@@ -33,7 +33,25 @@ export function CompletionPanel({ remote }: { remote: Snapshot | null }) {
       setData({ branches: branches.branches, chains: chains.chains, requests: requests.requests, forecasts: forecasts.forecasts, outbox: outbox.messages })
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load completion data.') }
   }
-  useEffect(() => { void load() }, [remote])
+  useEffect(() => {
+    if (!remote) return
+    let active = true
+    Promise.all([
+      request<{ branches: unknown[] }>('/branches'),
+      request<{ chains: unknown[] }>('/approvals/chains'),
+      request<{ requests: unknown[] }>('/approvals/requests'),
+      request<{ forecasts: unknown[] }>('/ai/forecasts'),
+      request<{ messages: unknown[] }>('/notifications/outbox').catch(() => ({ messages: [] as unknown[] })),
+    ])
+      .then(([branches, chains, requests, forecasts, outbox]) => {
+        if (!active) return
+        setData({ branches: branches.branches, chains: chains.chains, requests: requests.requests, forecasts: forecasts.forecasts, outbox: outbox.messages })
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load completion data.')
+      })
+    return () => { active = false }
+  }, [remote])
   const post = async (path: string, body: unknown) => {
     setError(''); setNotice('')
     try {

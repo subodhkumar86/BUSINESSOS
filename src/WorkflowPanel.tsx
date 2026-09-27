@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { request } from './api'
 import {
   workflowStates,
@@ -80,6 +80,21 @@ const config: Record<WorkflowKind, { title: string; fields: Field[] }> = {
       ['content', 'Article content', 'textarea'],
     ],
   },
+}
+const workflowCopy: Partial<Record<WorkflowKind, string>> = {
+  leave: 'Create, review and close leave requests without losing approval context.',
+  goals: 'Turn priorities into measurable goals and keep progress visible.',
+  reviews: 'Capture reviews, ratings and rewards in a structured employee record.',
+  appointments: 'Keep meetings, guests and reminders organised in one place.',
+  certifications: 'Track policy and certification evidence before it becomes overdue.',
+  findings: 'Assign corrective actions and retain evidence through resolution.',
+  knowledge: 'Build a searchable internal knowledge base for repeatable work.',
+}
+const workflowTone = (status: string) => {
+  if (['approved', 'completed', 'closed', 'active'].includes(status)) return 'green'
+  if (['rejected', 'cancelled', 'overdue'].includes(status)) return 'red'
+  if (['draft', 'pending'].includes(status)) return 'amber'
+  return 'blue'
 }
 export function WorkflowPanel({
   kind,
@@ -249,8 +264,15 @@ export function WorkflowPanel({
     return String(value)
   }
   return (
-    <section className="panel" aria-label={spec.title}>
-      <h2>{spec.title}</h2>
+    <section className="panel workflow-panel" aria-label={spec.title}>
+      <div className="section-top workflow-heading">
+        <div>
+          <p className="eyebrow">Workflow centre</p>
+          <h2>{spec.title}</h2>
+          <p>{workflowCopy[kind]}</p>
+        </div>
+        <span className="workflow-count"><b>{records.length}</b> records</span>
+      </div>
       {!remote && <p>Sign in to manage these records.</p>}
       {kind === 'leave' && (
         <p>
@@ -258,7 +280,7 @@ export function WorkflowPanel({
           requests. Approval does not change payroll.
         </p>
       )}
-      {kind === 'appointments' && editable && <p><button onClick={() => void runAppointmentReminders()} disabled={busy}>Queue due reminders</button></p>}
+      {kind === 'appointments' && editable && <p className="workflow-utility"><button onClick={() => void runAppointmentReminders()} disabled={busy}>Queue due reminders</button></p>}
       {error && (
         <p className="notice error" role="alert">
           {error}{' '}
@@ -274,7 +296,7 @@ export function WorkflowPanel({
       )}
       {editable && (
         <form
-          className="operations-fields"
+          className="operations-fields workflow-create"
           onSubmit={(event) => void create(event)}
         >
           {spec.fields.map(([name, label, type]) => (
@@ -323,7 +345,7 @@ export function WorkflowPanel({
           </button>
         </form>
       )}
-      <div className="operations-fields">
+      <div className="operations-fields workflow-filters">
         <label>
           Search
           <input
@@ -344,20 +366,22 @@ export function WorkflowPanel({
         </label>
       </div>
       {loading ? (
-        <p role="status">Loading data...</p>
+        <p role="status" className="empty">Loading workflow records...</p>
       ) : visible.length ? (
         visible.map((row) => (
-          <article className="card" key={row.id}>
-            <h3>
-              {String(
-                row.data.title ||
-                  state.employees.find(
-                    (employee) => employee.id === row.data.employeeId,
-                  )?.name ||
-                  spec.title,
-              )}
-            </h3>
-            <span className="badge">{row.status}</span>
+          <article className="card workflow-record" key={row.id}>
+            <div className="workflow-record-header">
+              <h3>
+                {String(
+                  row.data.title ||
+                    state.employees.find(
+                      (employee) => employee.id === row.data.employeeId,
+                    )?.name ||
+                    spec.title,
+                )}
+              </h3>
+              <span className={`badge ${workflowTone(row.status)}`}>{row.status}</span>
+            </div>
             <dl>
               {spec.fields
                 .filter(([name]) => name !== 'title')
@@ -396,7 +420,7 @@ export function WorkflowPanel({
               )}
             </dl>
             {editable && (
-              <div className="operations-fields">
+              <div className="operations-fields workflow-actions">
                 {kind === 'goals' && row.status === 'active' && (
                   <label>
                     Update progress
@@ -468,7 +492,7 @@ export function WorkflowPanel({
           </article>
         ))
       ) : (
-        <p>No records {records.length ? 'match your filters' : 'yet'}.</p>
+        <p className="empty">No records {records.length ? 'match your filters' : 'yet'}.</p>
       )}
     </section>
   )

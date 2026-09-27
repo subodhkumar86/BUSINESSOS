@@ -92,14 +92,21 @@ export function OperationsPanel({
     }
   }
   return (
-    <section className="panel operations-panel mx-auto w-full space-y-5">
-      <h2 className="text-lg font-bold tracking-tight text-emerald-950">{config.title}</h2>
+    <section className="panel operations-panel operations-workspace mx-auto w-full space-y-5">
+      <div className="section-top operations-heading">
+        <div>
+          <p className="eyebrow">Operations workspace</p>
+          <h2>{config.title}</h2>
+          <p>Create records, keep their status current, and resolve operational work from one view.</p>
+        </div>
+        <span className="operations-count"><b>{rows.length}</b> records</span>
+      </div>
       {!remote && <p className="notice rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Sign in to manage tenant records.</p>}
       {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{notice}</p>}
       {editable && (
         <form
-          className="inline-form rounded-2xl border border-emerald-100 bg-emerald-50/40 p-1"
+          className="inline-form operations-create"
           onSubmit={(event) => {
             event.preventDefault()
             const form = new FormData(event.currentTarget)
@@ -142,15 +149,18 @@ export function OperationsPanel({
           </fieldset>
         </form>
       )}
-      <label>
-        Search records{' '}
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-      {busy && <p role="status">Loading data…</p>}
+      <div className="operations-search">
+        <label>
+          Search records
+          <input
+            type="search"
+            placeholder="Search by name, status or reference"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+      </div>
+      {busy && <p role="status" className="empty">Loading operational records…</p>}
       <div className="table-wrap overflow-hidden shadow-sm">
         <table>
           <thead>
@@ -174,7 +184,7 @@ export function OperationsPanel({
                   {config.columns.map((column) => (
                     <td key={column}>{row[column] ?? '—'}</td>
                   ))}
-                  <td>
+                  <td className="operations-status-cell">
                     <select
                       aria-label={`Status for ${row.name || row.title || row.id}`}
                       value={String(row.status)}
@@ -245,12 +255,12 @@ export function OperationsPanel({
               ))}
           </tbody>
         </table>
+        {!busy && !rows.length && (
+          <p className="empty">
+            No records yet. Add your first record to get started.
+          </p>
+        )}
       </div>
-      {!busy && !rows.length && (
-        <p className="empty">
-          No records yet. Add your first record to get started.
-        </p>
-      )}
     </section>
   )
 }

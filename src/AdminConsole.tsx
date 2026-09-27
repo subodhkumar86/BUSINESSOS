@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { request } from './api'
 interface Plan {
   id: string
@@ -136,24 +136,24 @@ export function AdminConsole({
   }
   return (
     <div className="admin-console">
-      <h2>Platform administration</h2>
-      <p>
-        Govern tenants, subscriptions, operational controls and platform health
-        from one restricted workspace.
-      </p>
-      <nav className="flex flex-wrap gap-2" aria-label="Platform administration sections">
+      <div className="admin-header">
+        <div>
+          <p className="eyebrow">Restricted workspace</p>
+          <h2>Platform administration</h2>
+          <p>Govern tenants, subscriptions, operational controls and platform health from one secure workspace.</p>
+        </div>
+        <button className="secondary" disabled={busy} onClick={() => setRevision((v) => v + 1)}>Refresh data</button>
+      </div>
+      <nav className="admin-subnav" aria-label="Platform administration sections">
         {sections.map(([id, label]) => (
           <button key={id} className={section === id ? 'is-active' : ''} onClick={() => selectSection(id)}>
             {label}
           </button>
         ))}
       </nav>
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
-      <button disabled={busy} onClick={() => setRevision((v) => v + 1)}>
-        Refresh
-      </button>
-      {loading && <p role="status">Loading platform data...</p>}
+      {error && <p role="alert" className="notice error">{error}</p>}
+      {notice && <p role="status" className="notice success">{notice}</p>}
+      {loading && <p role="status" className="empty">Loading platform data...</p>}
       {(section === 'overview' || section === 'security' || section === 'audit') && <section className="card">
         <h3>{section === 'overview' ? 'Platform overview' : section === 'audit' ? 'Audit-ready platform status' : 'Security & service health'}</h3>
         {overview && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -218,13 +218,11 @@ export function AdminConsole({
                   </td>
                 </tr>
               ))}
-              {!loading && !tenants.length && (
-                <tr>
-                  <td colSpan={4}>No tenants found.</td>
-                </tr>
-              )}
             </tbody>
           </table>
+          {!loading && !tenants.length && (
+            <p className="empty">No tenants found.</p>
+          )}
         </div>
         <button
           disabled={offset === 0}

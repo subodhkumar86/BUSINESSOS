@@ -127,7 +127,7 @@ export function BillingPanel() {
   const usagePercent = Math.round((activeSeats / maxSeats) * 100)
 
   return (
-    <div className="module-panel">
+    <div className="module-panel billing-panel">
       {/* Telemetry Row */}
       <div className="stats-row">
         <div className="stat-card">

@@ -33,8 +33,8 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
   const pct = (b: Budget) => b.total_amount > 0 ? Math.min(100, Math.round((b.spent_amount / b.total_amount) * 100)) : 0
 
   return (
-    <section className="card">
-      <div className="section-top"><h2>Budget Management</h2></div>
+    <section className="card budget-panel">
+      <div className="section-top budget-heading"><div><p className="eyebrow">Financial planning</p><h2>Budget management</h2><p>Track departmental spend, remaining budget and utilisation throughout the period.</p></div><span className="budget-count"><b>{budgets.length}</b> budgets</span></div>
       {error && <div role="alert" className="alert">{error}</div>}
       {notice && <div role="status" className="notice">{notice}<button onClick={() => setNotice('')}>×</button></div>}
       <div className="table-scroll">
@@ -50,7 +50,7 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
                 <td>{b.period_from} → {b.period_to}</td>
                 <td>{money(b.total_amount)}</td>
                 <td>{money(b.spent_amount)}</td>
-                <td style={{ color: variance(b) < 0 ? '#c0392b' : '#27ae60' }}>{money(variance(b))}</td>
+                <td className={variance(b) < 0 ? 'budget-variance is-negative' : 'budget-variance'}>{money(variance(b))}</td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ flex: 1, height: 8, background: '#eee', borderRadius: 4 }}>
@@ -92,7 +92,7 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
       </div>
       {!readOnly && remote && (
         <form
-          className="inline-form"
+          className="inline-form budget-create"
           onSubmit={async (e) => {
             e.preventDefault()
             setBusy(true)

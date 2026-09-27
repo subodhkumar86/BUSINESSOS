@@ -292,7 +292,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
   const mbFormatted = (totalBytes / (1024 * 1024)).toFixed(1)
 
   return (
-    <div className="module-panel">
+    <div className="module-panel documents-panel">
       {/* Telemetry Row */}
       <div className="stats-row">
         <div className="stat-card">

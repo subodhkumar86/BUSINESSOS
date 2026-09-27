@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { request } from './api'
 import type { Snapshot } from './types'
 
@@ -135,13 +135,22 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
         .toLowerCase()
         .includes(search.toLowerCase()),
   )
+  const activeCandidates = candidates.filter(
+    (candidate) => !['hired', 'rejected'].includes(candidate.status),
+  ).length
   return (
-    <section className="panel" aria-label="Recruitment">
-      <h2>Recruitment</h2>
-      <p>
-        Track candidates from application to hiring, then add confirmed hires to
-        the employee register with their department and monthly compensation.
-      </p>
+    <section className="panel recruitment-panel" aria-label="Recruitment">
+      <div className="section-top recruitment-heading">
+        <div>
+          <p className="eyebrow">People operations</p>
+          <h2>Recruitment pipeline</h2>
+          <p>Track candidates from application to hiring, then add confirmed hires to the employee register.</p>
+        </div>
+        <div className="recruitment-summary" aria-label="Recruitment summary">
+          <span><b>{activeCandidates}</b> active</span>
+          <span><b>{candidates.filter((candidate) => candidate.status === 'hired').length}</b> hired</span>
+        </div>
+      </div>
       {!remote && <p>Sign in to manage your recruitment pipeline.</p>}
       {error && (
         <p role="alert" className="notice error">
@@ -156,7 +165,7 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
       {editable && (
         <form
           onSubmit={(event) => void create(event)}
-          className="operations-fields"
+          className="operations-fields recruitment-create"
         >
           <label>
             Candidate name
@@ -179,7 +188,7 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
           </button>
         </form>
       )}
-      <div className="operations-fields">
+      <div className="operations-fields recruitment-filters">
         <label>
           Search candidates
           <input
@@ -208,7 +217,7 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
         </label>
       </div>
       {loading ? (
-        <p role="status">Loading candidates…</p>
+        <p role="status" className="empty">Loading candidates…</p>
       ) : (
         <div className="table-scroll">
           <table>
@@ -230,8 +239,8 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
                   </td>
                   <td>{candidate.position}</td>
                   <td>{candidate.notes || '—'}</td>
-                  <td>{candidate.status}</td>
-                  <td>
+                  <td><span className={`badge stage-${candidate.status}`}>{candidate.status}</span></td>
+                  <td className="table-actions">
                     {editable && nextStage[candidate.status] ? (
                       <>
                         <button
@@ -275,17 +284,15 @@ export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
                   </td>
                 </tr>
               ))}
-              {!visible.length && (
-                <tr>
-                  <td colSpan={5}>
-                    {candidates.length
-                      ? 'No candidates match your filters.'
-                      : 'No candidates yet.'}
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
+          {!visible.length && (
+            <p className="empty">
+              {candidates.length
+                ? 'No candidates match your filters.'
+                : 'No candidates yet.'}
+            </p>
+          )}
         </div>
       )}
     </section>

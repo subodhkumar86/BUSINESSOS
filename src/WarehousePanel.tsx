@@ -26,7 +26,20 @@ export function WarehousePanel({ remote, onRefresh }: { remote: Snapshot | null;
     try { const [fulfillmentData, returnData] = await Promise.all([request<{ records: Stored[] }>('/warehouse/fulfillments'), request<{ records: Stored[] }>('/warehouse/returns')]); setFulfillments(fulfillmentData.records.map(asFulfillment).filter((item): item is Fulfillment => Boolean(item))); setReturns(returnData.records.map(asReturn).filter((item): item is Return => Boolean(item))) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load warehouse records.') }
   }
-  useEffect(() => { void load() }, [remote])
+  useEffect(() => {
+    if (!remote) return
+    let active = true
+    Promise.all([request<{ records: Stored[] }>('/warehouse/fulfillments'), request<{ records: Stored[] }>('/warehouse/returns')])
+      .then(([fulfillmentData, returnData]) => {
+        if (!active) return
+        setFulfillments(fulfillmentData.records.map(asFulfillment).filter((item): item is Fulfillment => Boolean(item)))
+        setReturns(returnData.records.map(asReturn).filter((item): item is Return => Boolean(item)))
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : 'Could not load warehouse records.')
+      })
+    return () => { active = false }
+  }, [remote])
   async function create(event: React.FormEvent, kind: 'fulfillment' | 'return') {
     event.preventDefault(); if (!editable) return
     const formElement = event.currentTarget as HTMLFormElement
@@ -45,7 +58,7 @@ export function WarehousePanel({ remote, onRefresh }: { remote: Snapshot | null;
     try { if (remote) await request('/warehouse/' + (kind === 'fulfillment' ? 'fulfillments/' : 'returns/') + id, { method: 'PATCH', headers, body: JSON.stringify({ status }) }); await load(); setNotice('Warehouse status updated.') }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update warehouse record.') }
   }
-  return <div className="module-panel">
+  return <div className="module-panel warehouse-panel">
     <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}><button className={tab === 'shipments' ? 'primary' : ''} onClick={() => setTab('shipments')}>Shipments</button><button className={tab === 'transfers' ? 'primary' : ''} onClick={() => setTab('transfers')}>Stock transfers</button><button className={tab === 'fulfillment' ? 'primary' : ''} onClick={() => setTab('fulfillment')}>Legacy tracking ({fulfillments.filter(item => item.status !== 'dispatched').length} open)</button><button className={tab === 'shipment_returns' ? 'primary' : ''} onClick={() => setTab('shipment_returns')}>Returns &amp; inspection</button><button className={tab === 'returns' ? 'primary' : ''} onClick={() => setTab('returns')}>Previous return records ({returns.filter(item => item.resolution === 'pending').length} pending)</button></div>
     {notice && <p role="status" className="notice success">{notice}</p>}{error && <p role="alert" className="notice error">{error}</p>}
     {tab === 'shipment_returns' && <ReturnsPanel remote={remote} onRefresh={onRefresh} />}

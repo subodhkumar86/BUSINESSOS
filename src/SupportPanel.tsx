@@ -227,7 +227,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
   }
 
   return (
-    <div className="module-panel">
+    <div className="module-panel support-panel">
       {/* Queue metrics derive from ticket records. */}
       <div className="stats-row">
         <div className="stat-card">
@@ -309,7 +309,7 @@ export function SupportPanel({ remote }: { remote: Snapshot | null }) {
                     <td>{t.customer}</td>
                     <td>{t.subject}</td>
                     <td>
-                      <span className={`badge ${t.priority === 'urgent' ? 'red' : t.priority === 'high' ? 'yellow' : ''}`}>
+                      <span className={`badge ${t.priority === 'urgent' ? 'red' : t.priority === 'high' ? 'amber' : t.priority === 'medium' ? 'blue' : ''}`}>
                         {t.priority.toUpperCase()}
                       </span>
                     </td>

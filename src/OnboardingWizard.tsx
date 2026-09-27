@@ -24,21 +24,20 @@ export function OnboardingWizard({
   remote: Snapshot | null
   onNavigate: (page: string) => void
 }) {
-  const [state, setState] = useState<OnboardingState | null>(null)
+  const [state, setState] = useState<OnboardingState | null>(() => {
+    if (remote) return null
+    try {
+      const saved = JSON.parse(localStorage.getItem(demoOnboardingStorageKey) || '{"completedSteps":[],"dismissed":false}')
+      return { completedSteps: Array.isArray(saved.completedSteps) ? saved.completedSteps : [], dismissed: Boolean(saved.dismissed) }
+    } catch {
+      return { completedSteps: [], dismissed: false }
+    }
+  })
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (remote) {
-      if (remote.user.role !== 'owner') return
-      request<OnboardingState>('/onboarding').then(setState).catch(() => undefined)
-      return
-    }
-    try {
-      const saved = JSON.parse(localStorage.getItem(demoOnboardingStorageKey) || '{"completedSteps":[],"dismissed":false}')
-      setState({ completedSteps: Array.isArray(saved.completedSteps) ? saved.completedSteps : [], dismissed: Boolean(saved.dismissed) })
-    } catch {
-      setState({ completedSteps: [], dismissed: false })
-    }
+    if (!remote || remote.user.role !== 'owner') return
+    request<OnboardingState>('/onboarding').then(setState).catch(() => undefined)
   }, [remote])
 
   if ((remote && remote.user.role !== 'owner') || !state || state.dismissed) return null
@@ -101,8 +100,9 @@ export function OnboardingWizard({
     <section className="card onboarding-card" aria-label="Workspace onboarding">
       <div className="section-top onboarding-header">
         <div>
+          <p className="eyebrow">Workspace setup</p>
           <h2>Get started with BusinessOS</h2>
-          <small>{completed} of {STEPS.length} steps complete</small>
+          <small>{completed} of {STEPS.length} steps complete · {remaining.length} remaining</small>
         </div>
         <button
           className="onboarding-dismiss"
@@ -123,6 +123,7 @@ export function OnboardingWizard({
       >
         <div style={{ width: progress + '%' }} />
       </div>
+      <p className="onboarding-progress-copy">Complete the essentials first; you can return to the rest whenever you are ready.</p>
       <div className="onboarding-steps">
         {STEPS.map((step) => {
           const isComplete = state.completedSteps.includes(step.id)

@@ -17,20 +17,20 @@ export function VirtualWorkspace({
   state: State
 }) {
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
-  const [messages, setMessages] = useState<WorkspaceMessage[]>([])
+  const [messages, setMessages] = useState<WorkspaceMessage[]>(() => {
+    if (remote) return []
+    try {
+      const saved = JSON.parse(localStorage.getItem(demoChatStorageKey) || '[]')
+      return Array.isArray(saved) ? saved : []
+    } catch {
+      return []
+    }
+  })
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(Boolean(remote))
   useEffect(() => {
-    if (!remote) {
-      try {
-        const saved = JSON.parse(localStorage.getItem(demoChatStorageKey) || '[]')
-        if (Array.isArray(saved)) setMessages(saved)
-      } catch {
-        localStorage.removeItem(demoChatStorageKey)
-      }
-      return
-    }
+    if (!remote) return
     let active = true
     Promise.all([request<{ notifications: Announcement[] }>('/notifications'), request<{ messages: WorkspaceMessage[] }>('/workspace/chat')])
       .then(([data, chat]) => {

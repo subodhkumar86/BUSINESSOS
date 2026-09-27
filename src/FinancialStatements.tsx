@@ -32,13 +32,16 @@ export function FinancialStatements({
         ? cash
         : { ...balance.assets, ...balance.liabilities, ...balance.equity }
   return (
-    <section className="panel">
-      <h2>Financial statements</h2>
-      <p>
-        Reports reflect posted journals and opening cash. Legacy demo records
-        without journal entries are excluded.
-      </p>
-      <div className="operations-fields">
+    <section className="panel financial-statements">
+      <div className="section-top financial-heading">
+        <div>
+          <p className="eyebrow">Financial reporting</p>
+          <h2>Financial statements</h2>
+          <p>Review posted journals and opening cash for a selected reporting period.</p>
+        </div>
+        <span className="financial-period">{from || to ? 'Custom period' : 'All posted data'}</span>
+      </div>
+      <div className="operations-fields financial-period-fields">
         <label>
           From (UTC)
           <input
@@ -65,12 +68,12 @@ export function FinancialStatements({
         </button>
       </div>
       {!parsed.success && (
-        <p role="alert">
+        <p role="alert" className="notice error">
           Enter valid dates with the start on or before the end.
         </p>
       )}
       {parsed.success && connected && (
-        <div className="operations-fields">
+        <div className="financial-exports" aria-label="Export financial statement">
           {['csv', 'xlsx', 'pdf'].map((format) => (
             <a
               key={format}
@@ -84,16 +87,16 @@ export function FinancialStatements({
               target="_blank"
               rel="noreferrer"
             >
-              Export this period ({format.toUpperCase()})
+              Export {format.toUpperCase()}
             </a>
           ))}
         </div>
       )}
-      <p>
+      <p className="financial-note">
         Balance sheet includes all postings through the end date. Cash opening
         balance includes earlier cash movements.
       </p>
-      <div role="group" aria-label="Financial statement">
+      <div role="group" aria-label="Financial statement" className="financial-tabs">
         {[
           ['income', 'Income statement'],
           ['balance', 'Balance sheet'],
@@ -103,41 +106,44 @@ export function FinancialStatements({
             key={key}
             aria-pressed={tab === key}
             onClick={() => setTab(key)}
+            className={tab === key ? 'is-active' : ''}
           >
             {title}
           </button>
         ))}
       </div>
       {parsed.success && tab === 'balance' && (
-        <p role="status">
+        <p role="status" className={balance.isBalanced ? "notice success" : "notice error"}>
           {balance.isBalanced
-            ? 'Assets equal liabilities plus equity.'
-            : 'The ledger does not balance. Review account classification and postings.'}
+            ? '✓ Assets equal liabilities plus equity.'
+            : '⚠️ The ledger does not balance. Review account classification and postings.'}
         </p>
       )}
       {parsed.success && (
-        <table>
-          <thead>
-            <tr>
-              <th>Line item</th>
-              <th>Amount ({state.currency})</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(data).map(([key, value]) => (
-              <tr key={key}>
-                <th scope="row">{key.replace(/([A-Z])/g, ' $1')}</th>
-                <td>
-                  {typeof value === 'number'
-                    ? value.toLocaleString(undefined, {
-                        maximumFractionDigits: 2,
-                      })
-                    : value}
-                </td>
+        <div className="table-scroll financial-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Line item</th>
+                <th>Amount ({state.currency})</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {Object.entries(data).map(([key, value]) => (
+                <tr key={key}>
+                  <th scope="row">{key.replace(/([A-Z])/g, ' $1')}</th>
+                  <td>
+                    {typeof value === 'number'
+                      ? value.toLocaleString(undefined, {
+                          maximumFractionDigits: 2,
+                        })
+                      : value}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   )

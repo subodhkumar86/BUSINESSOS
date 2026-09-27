@@ -226,7 +226,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
   }
 
   return (
-    <div className="module-panel">
+    <div className="module-panel tax-panel">
       {/* Telemetry Row */}
       <div className="stats-row">
         <div className="stat-card">

@@ -7,10 +7,17 @@ export function Payslips({ state }: { state: State }) {
   const runs = state.payroll.filter((run) => run.status === 'Approved')
   const slips = generatePayslips(state, runId)
   return (
-    <section className="panel">
-      <h2>Employee payslips</h2>
-      <label>
-        Approved payroll period{' '}
+    <section className="panel payslips-panel">
+      <div className="section-top payslips-heading">
+        <div>
+          <p className="eyebrow">Payroll records</p>
+          <h2>Employee payslips</h2>
+          <p>Review approved payroll records. Approval does not confirm payment.</p>
+        </div>
+        {runId && <span className="payslips-count"><b>{slips.length}</b> payslips</span>}
+      </div>
+      <label className="payslip-period-picker">
+        Approved payroll period
         <select value={runId} onChange={(e) => setRunId(e.target.value)}>
           <option value="">Select a period</option>
           {runs.map((run) => (
@@ -20,7 +27,7 @@ export function Payslips({ state }: { state: State }) {
           ))}
         </select>
       </label>
-      <p>
+      <p className="payslip-note">
         Pension uses gross pay as the configured pensionable base. Additional
         personal reliefs are not configured. Approval does not confirm payment.
       </p>
@@ -33,8 +40,9 @@ export function Payslips({ state }: { state: State }) {
           have been inferred.
         </p>
       )}
+      <div className="payslip-list">
       {slips.map((slip) => (
-        <details key={slip.id}>
+        <details key={slip.id} className="payslip-item">
           <summary>
             {slip.employeeName} · Net pay {state.currency}{' '}
             {slip.netPay.toLocaleString()}
@@ -59,6 +67,7 @@ export function Payslips({ state }: { state: State }) {
           </dl>
         </details>
       ))}
+      </div>
     </section>
   )
 }
