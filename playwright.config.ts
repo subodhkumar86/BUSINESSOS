@@ -8,7 +8,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   webServer: process.env.E2E_BASE_URL ? undefined : {
-    command: 'npm run dev -- --host 127.0.0.1 --port 5178 --strictPort',
+    command: 'npm.cmd run dev -- --host 127.0.0.1 --port 5178 --strictPort',
     url: 'http://127.0.0.1:5178',
     reuseExistingServer: !process.env.CI,
   },

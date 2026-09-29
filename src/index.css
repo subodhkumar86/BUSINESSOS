@@ -1969,3 +1969,149 @@ tbody tr:last-child td {
     padding: 0.85rem;
   }
 }
+
+/* ========================================================================== 
+   MODULE EXPERIENCE LAYER
+   Shared layouts for the operational workspaces. Keeping these primitives
+   together means new modules inherit the same hierarchy and mobile behavior.
+   ========================================================================== */
+.module-panel,
+.automation-panel,
+.billing-panel,
+.budget-panel,
+.customers-panel,
+.documents-panel,
+.operations-panel,
+.payslips-panel,
+.recruitment-panel,
+.returns-panel,
+.rfq-panel,
+.suppliers-panel,
+.tax-panel,
+.warehouse-panel,
+.workflow-panel,
+.financial-statements,
+.security-settings,
+.admin-console,
+.role-matrix-container {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.stats-row,
+.shipment-stats,
+.recruitment-summary,
+.ai-forecast-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1rem;
+}
+
+.stat-card,
+.forecast-card,
+.finance-action-card {
+  display: grid;
+  align-content: start;
+  gap: .35rem;
+  min-height: 8rem;
+  padding: 1.1rem 1.2rem;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+.stat-label,.kpi-label { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.stat-value,.kpi-val { color: var(--text-primary); font-size: clamp(1.35rem, 2.5vw, 1.8rem); font-variant-numeric: tabular-nums; }
+
+.customers-heading,.operations-heading,.payslips-heading,.recruitment-heading,.rfq-heading,.workflow-heading,.budget-heading,.financial-heading,.security-heading,.team-heading,.admin-header,.role-header {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: .85rem;
+}
+.customers-heading > div,.operations-heading > div,.payslips-heading > div,.recruitment-heading > div,.rfq-heading > div,.workflow-heading > div,.budget-heading > div,.financial-heading > div,.security-heading > div,.team-heading > div,.admin-header > div,.role-header > div { min-width: 0; }
+.customers-heading h1,.operations-heading h1,.payslips-heading h1,.recruitment-heading h1,.rfq-heading h1,.workflow-heading h1,.budget-heading h1,.financial-heading h1,.security-heading h1,.team-heading h1,.admin-header h1,.role-header h1 { margin: 0; }
+
+.inline-form,.customer-form,.stock-form,.budget-create,.workflow-create,.recruitment-create,.returns-create,.rfq-create,.team-invite-form,.security-password-form,.financial-period-fields,.operations-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  align-items: end;
+  gap: .8rem;
+}
+.inline-form h2,.customer-form h2,.stock-form h2,.budget-create h2,.workflow-create h2,.recruitment-create h2,.returns-create h2,.rfq-create h2,.team-invite-form h2,.security-password-form h2 { grid-column: 1 / -1; margin: 0; }
+.inline-form .primary,.customer-form .primary,.stock-form .primary,.budget-create .primary,.workflow-create .primary,.recruitment-create .primary,.returns-create .primary,.rfq-create .primary,.team-invite-form .primary,.security-password-form .primary { align-self: end; }
+
+.customers-search,.operations-search,.workflow-filters,.recruitment-filters,.returns-filters,.history-controls,.payslip-period-picker,.financial-period,.bank-account-picker,.financial-tabs,.admin-subnav,.role-selector-pills {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .65rem;
+}
+.customers-search input,.operations-search input { flex: 1 1 16rem; }
+.financial-tabs button,.admin-subnav button,.role-pill { box-shadow: none; }
+.financial-tabs button[aria-selected="true"],.admin-subnav button.active,.role-pill.active { border-color: var(--brand-border); background: var(--brand-subtle); color: var(--brand-primary); }
+
+.preview-list,.account-list,.telemetry-list,.anomaly-list,.supplier-cues,.handoff-steps { display: grid; gap: .7rem; }
+.preview-row,.account-row,.telemetry-item,.anomaly-item,.return-record,.payslip-item,.workflow-record {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .85rem;
+  padding: .9rem 1rem; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-surface-subtle);
+}
+.preview-row > div,.account-row > div,.telemetry-item > div,.anomaly-item > div,.return-record > div,.payslip-item > div,.workflow-record > div { display: grid; gap: .18rem; min-width: 0; }
+.preview-row small,.account-row small,.telemetry-item small,.anomaly-item small,.return-record small,.payslip-item small,.workflow-record small { display: block; }
+
+.two-col,.role-two-col,.operations-workspace,.financial-exports { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1.25rem; }
+.account-mark,.feature-icon,.alert-icon { flex: 0 0 auto; }
+.muted,.subtitle,.footnote,.financial-note,.security-note,.restriction-text { color: var(--text-muted); }
+.mono { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: .8rem; }
+.permission-box,.lineage-box,.supply-chain-guidance,.security-danger-zone,.revenue-handoff { padding: 1rem 1.1rem; border-radius: 12px; border: 1px solid var(--brand-border); background: var(--brand-subtle); }
+.security-danger-zone { border-color: var(--danger-border); background: var(--danger-bg); }
+.warning { color: var(--warning-text); }.done { color: var(--success-text); }.is-negative { color: var(--danger-text); }
+.badge,.role-tag,.confidence-pill,.prompt-pill,.local-tag { white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .two-col,.role-two-col,.operations-workspace,.financial-exports { grid-template-columns: 1fr; }
+  .customers-heading,.operations-heading,.payslips-heading,.recruitment-heading,.rfq-heading,.workflow-heading,.budget-heading,.financial-heading,.security-heading,.team-heading,.admin-header,.role-header { align-items: stretch; }
+  .customers-heading > .primary,.operations-heading > .primary,.payslips-heading > .primary,.recruitment-heading > .primary,.rfq-heading > .primary,.workflow-heading > .primary,.budget-heading > .primary { width: 100%; }
+  .stats-row,.shipment-stats,.recruitment-summary,.ai-forecast-grid { grid-template-columns: 1fr; }
+  .inline-form,.customer-form,.stock-form,.budget-create,.workflow-create,.recruitment-create,.returns-create,.rfq-create,.team-invite-form,.security-password-form,.financial-period-fields,.operations-fields { grid-template-columns: 1fr; }
+}
+
+/* Page-level states and compact utilities used across the remaining modules. */
+.skip-link { position: fixed; z-index: 100; left: 1rem; top: -4rem; padding: .65rem .9rem; border-radius: 8px; background: var(--text-primary); color: var(--bg-surface); }
+.skip-link:focus { top: 1rem; }
+.activity,.notification-list,.payslip-list,.onboarding-steps,.allowed-modules-list,.restrictions,.tags,.prompt-pills { display: grid; gap: .65rem; }
+.activity > *, .notification-item { padding: .8rem .9rem; border-bottom: 1px solid var(--border-subtle); }
+.activity-dot,.notification-dot { display: inline-block; width: .55rem; height: .55rem; margin-right: .5rem; border-radius: 50%; background: var(--brand-primary); }
+.onboarding-card,.password-reset-card,.customer-profile,.fulfillment-card,.stock-preview,.role-detail-card,.team-panel,.support-panel { border: 1px solid var(--border-default); border-radius: var(--radius-card); background: var(--bg-surface); padding: 1.25rem; box-shadow: var(--shadow-sm); }
+.onboarding-header,.onboarding-progress-copy,.workflow-record-header,.forecast-header,.forecast-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .65rem; }
+.onboarding-progress { height: .45rem; overflow: hidden; border-radius: 99px; background: var(--bg-surface-subtle); }
+.onboarding-progress > * { display: block; height: 100%; border-radius: inherit; background: var(--brand-primary); }
+.notification-popover,.notification-menu { width: min(24rem, calc(100vw - 2rem)); max-height: min(32rem, calc(100vh - 5rem)); overflow: auto; border: 1px solid var(--border-default); border-radius: 14px; background: var(--bg-dropdown); box-shadow: var(--shadow-xl); }
+.notification-empty { padding: 2rem 1rem; text-align: center; color: var(--text-muted); }
+.role-matrix-table { overflow-x: auto; }.highlighted-row { background: var(--brand-subtle); }.can-do { color: var(--success-text); }
+.hero-blob { position: absolute; z-index: -1; width: 20rem; height: 20rem; border-radius: 50%; filter: blur(42px); opacity: .25; pointer-events: none; }.hero-blob-a { top: -8rem; left: -9rem; background: var(--brand-primary); }.hero-blob-b { right: -9rem; bottom: -11rem; background: #7c3aed; }
+@media (max-width: 767px) { .nav-links.is-open { position: absolute; top: calc(100% + .5rem); left: 1rem; right: 1rem; display: grid; padding: .5rem; border: 1px solid var(--border-default); border-radius: 12px; background: var(--bg-dropdown); box-shadow: var(--shadow-lg); } }
+
+/* Finishing details for specialized screens and workflow states. */
+.auth-brand { display: flex; align-items: center; gap: .65rem; font: 800 1.2rem var(--font-display); }
+.auth-links,.auth-demo-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; }.auth-footnote { font-size: .78rem; line-height: 1.55; }
+.onboarding-step { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: .85rem; padding: .85rem 0; border-top: 1px solid var(--border-subtle); }.onboarding-step.is-done { opacity: .68; }.onboarding-check { display: inline-grid; place-items: center; min-width: 3.4rem; min-height: 1.65rem; border-radius: 99px; background: var(--bg-surface-subtle); color: var(--text-muted); font-size: .7rem; font-weight: 700; }.is-done .onboarding-check { background: var(--success-bg); color: var(--success-text); }.onboarding-copy p { margin: .2rem 0 0; font-size: .8rem; color: var(--text-muted); }.onboarding-link { padding: 0; border: 0; background: none; box-shadow: none; color: var(--text-primary); font-weight: 700; text-align: left; }.onboarding-action,.onboarding-dismiss { white-space: nowrap; }.onboarding-dismiss { min-width: 2rem; padding-inline: .5rem; }
+.notification-menu { position: relative; width: auto; max-height: none; overflow: visible; border: 0; background: transparent; box-shadow: none; }.notification-trigger { position: relative; min-width: 2.4rem; padding: .5rem; }.notification-trigger svg { width: 1.15rem; height: 1.15rem; }.notification-count { position: absolute; top: -.25rem; right: -.25rem; display: grid; place-items: center; min-width: 1.15rem; height: 1.15rem; border: 2px solid var(--bg-header); border-radius: 99px; background: var(--danger-dot); color: #fff; font-size: .6rem; font-weight: 800; }.notification-popover { position: absolute; z-index: 70; top: calc(100% + .55rem); right: 0; }.notification-popover header { display: flex; justify-content: space-between; align-items: center; padding: .9rem 1rem; border-bottom: 1px solid var(--border-default); }.notification-popover header div { display: grid; gap: .1rem; }.notification-close { min-width: 2rem; padding: .35rem; }.notification-compose { padding: .75rem 1rem; border-bottom: 1px solid var(--border-default); }.notification-compose form { display: grid; gap: .55rem; margin-top: .6rem; }.notification-item { width: 100%; display: flex; align-items: flex-start; text-align: left; border: 0; border-radius: 0; background: transparent; box-shadow: none; }.notification-item:hover { transform: none; background: var(--bg-surface-hover); }.notification-item span:last-child { display: grid; gap: .15rem; }.notification-item time { font-size: .7rem; color: var(--text-faint); }.notification-unavailable { margin: .75rem 1rem; padding: .65rem .75rem; border-radius: 8px; background: var(--warning-bg); color: var(--warning-text); font-size: .78rem; }
+.password-reset-shell { padding: 1.25rem; }.reset-form { display: grid; gap: .9rem; margin: 1.25rem 0; }.reset-intro,.reset-complete { line-height: 1.6; }.reset-complete { padding: .8rem 1rem; border-radius: 10px; background: var(--success-bg); color: var(--success-text); }
+.budget-count,.customers-count,.operations-count,.payslips-count,.rfq-count,.workflow-count { color: var(--brand-primary); font-weight: 700; }.budget-variance { font-variant-numeric: tabular-nums; }.operations-status-cell { white-space: nowrap; }.operations-create,.team-invite,.workflow-actions,.workflow-utility { display: flex; flex-wrap: wrap; gap: .55rem; }.movement-details,.statement-import,.manual-match,.scenario,.ask,.answer,.info,.attention { padding: .9rem 1rem; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-surface-subtle); }.answer { border-color: var(--brand-border); background: var(--brand-subtle); }.attention { border-color: var(--warning-border); background: var(--warning-bg); }.bars { display: grid; gap: .45rem; }.header-avatar { flex: 0 0 auto; }.growth-label { margin-top: 1.25rem; }.task { display: flex; align-items: center; gap: .55rem; }.task input { width: auto; }.financial-table { border: 1px solid var(--border-default); border-radius: 12px; overflow: auto; }.cmd-footer-brand { font-weight: 700; color: var(--text-primary); }
+@media (max-width: 560px) { .onboarding-step { grid-template-columns: auto minmax(0,1fr); }.onboarding-action { grid-column: 2; justify-self: start; }.auth-links,.auth-demo-actions { display: grid; }.notification-popover { position: fixed; top: 4.5rem; right: 1rem; left: 1rem; width: auto; } }
+.app-sidebar { min-width: 0; }.site-header.is-scrolled { box-shadow: var(--shadow-sm); }.payslip-note { color: var(--text-muted); font-size: .8rem; }.role { font-weight: 700; color: var(--text-primary); }
+
+/* Keep the stacked tablet/mobile shell from inheriting the widest child width. */
+@media (max-width: 1023px) {
+  .shell { grid-template-columns: minmax(0, 1fr); max-width: 100%; overflow-x: clip; }
+  .shell > aside { position: relative; width: 100%; max-width: 100%; height: auto; overflow: visible; }
+  .main { width: 100%; max-width: 100%; overflow-x: clip; }
+  .app-header,.header-actions,.breadcrumb { min-width: 0; }
+  .header-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
+
+/* Respect system accessibility preferences without changing the product flow. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
