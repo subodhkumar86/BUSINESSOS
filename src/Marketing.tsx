@@ -198,7 +198,7 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
               <div className="preview-panel-wide">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                   <b style={{ fontSize: '0.85rem' }}>Synchronized Enterprise Cashflow & Accruals</b>
-                  <span className="badge green">Reconciled to PostgreSQL</span>
+                  <span className="badge green">Reconciled to MongoDB</span>
                 </div>
                 <div className="preview-bars">
                   <div>

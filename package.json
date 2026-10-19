@@ -4,49 +4,38 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "npm run typecheck && vite build",
+    "dev": "next dev",
+    "build": "next build --webpack",
     "lint": "oxlint",
-    "preview": "vite preview",
     "test": "node --test tests/domain.test.js tests/security.test.ts tests/inventory.test.ts tests/completion.test.ts tests/completion2.test.ts tests/tax.test.ts tests/deepseek.test.ts tests/reconciliation.test.ts tests/recruitment.test.ts tests/workflows.test.ts tests/exports.test.ts tests/shipments.test.ts tests/returns.test.ts tests/budget-rfq.test.ts",
-    "dev:api": "node --env-file-if-exists=.env --watch server/index.ts",
-    "start:api": "node --env-file-if-exists=.env server/index.ts",
-    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
-    "admin:provision": "node --env-file-if-exists=.env scripts/provision-super-admin.ts",
-    "db:seed-demo": "node --env-file-if-exists=.env scripts/seed-demo.ts",
-    "cpanel:build": "node scripts/cpanel-build.cjs",
-    "cpanel:migrate": "node scripts/cpanel-migrate.cjs",
-    "cpanel:doctor": "node scripts/cpanel-doctor.cjs",
-    "cpaneldoctor": "node scripts/cpanel-doctor.cjs",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/mongo-setup.ts",
     "typecheck": "tsc --noEmit",
-    "test:integration": "node --env-file-if-exists=.env --test tests/api.test.ts",
-    "format": "prettier --write src server scripts tests",
-    "test:stack": "node scripts/integration.ts",
-    "doctor": "node scripts/doctor.ts",
-    "test:e2e": "playwright test"
+    "test:integration": "node --env-file-if-exists=.env --import tsx --test tests/mongo-api.test.ts",
+    "format": "prettier --write app src server scripts tests",
+    "test:e2e": "playwright test",
+    "start": "next start"
   },
   "dependencies": {
-    "pg": "^8.23.0",
+    "mongodb": "^7.7.0",
+    "next": "^16.4.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "redis": "^6.2.1",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.4.1",
-    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^5.0.4",
+    "mongodb-memory-server": "^11.3.0",
     "oxlint": "^1.79.0",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.3.3",
-    "typescript": "^7.0.2",
-    "vite": "^6.3.0"
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=22.18.0"
+    "node": "24.x"
   }
 }

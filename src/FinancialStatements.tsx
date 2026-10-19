@@ -78,7 +78,6 @@ export function FinancialStatements({
             <a
               key={format}
               href={
-                (import.meta.env.VITE_API_URL || '').replace(/\/$/, '') +
                 '/api/v1/finance/export.' +
                 format +
                 '?' +

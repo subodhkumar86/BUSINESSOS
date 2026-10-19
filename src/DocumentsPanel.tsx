@@ -239,7 +239,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
           body: JSON.stringify({ expiresHours: hours }),
         },
       )
-      const apiOrigin = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '')
+      const apiOrigin = window.location.origin
       setSharedLink({
         id: doc.id,
         url: `${apiOrigin}/api/v1/shared-documents/${result.token}`,
@@ -429,7 +429,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
                             type="button"
                             onClick={() =>
                               window.open(
-                                `${(import.meta.env.VITE_API_URL || '').replace(/\/$/, '')}/api/v1/documents/${doc.id}/content`,
+                                `/api/v1/documents/${doc.id}/content`,
                                 '_blank',
                                 'noopener',
                               )

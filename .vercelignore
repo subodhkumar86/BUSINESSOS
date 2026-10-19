@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.cache
+.npm-cache
+.next
+node_modules
+test-results
+playwright-report
+.git

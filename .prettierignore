@@ -1,4 +1,5 @@
 ﻿node_modules
-dist
+.next
+.cache
 .npm-cache
 package-lock.json

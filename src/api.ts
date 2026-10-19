@@ -1,5 +1,4 @@
 ﻿import type { Snapshot, Action } from './types'
-const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -14,15 +13,15 @@ export async function request<T>(
 ): Promise<T> {
   let response: Response
   try {
-    response = await fetch(apiBase + '/api/v1' + path, {
+    response = await fetch('/api/v1' + path, {
       ...options,
-      credentials: apiBase ? 'include' : 'same-origin',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', ...options.headers },
     })
   } catch {
     throw new ApiError(
       503,
-      'Cannot reach the API. Start the API, PostgreSQL, and Redis.',
+      'Cannot reach the API. Start the Next.js API and MongoDB.',
     )
   }
   const data = await response

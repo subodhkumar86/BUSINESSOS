@@ -1,11 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -14,16 +10,25 @@
     "noEmit": true,
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
-    "types": [
-      "node",
-      "vite/client"
-    ]
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "allowJs": true
   },
   "include": [
+    "next-env.d.ts",
+    "app",
     "src",
-    "server",
-    "scripts",
-    "vite.config.ts",
-    "tests/*.ts"
-  ]
+    "server/mongo",
+    "scripts/mongo-setup.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
 }

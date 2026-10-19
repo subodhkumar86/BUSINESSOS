@@ -412,7 +412,7 @@ function App({
       setError('')
       setNotice(
         remote
-          ? 'Changes saved to PostgreSQL.'
+          ? 'Changes saved to MongoDB.'
           : 'Changes saved to this browser.',
       )
       return true
@@ -816,7 +816,7 @@ function App({
         )}
         <div className="aside-bottom">
           <span className="status-dot" />{' '}
-          {remote ? 'Saved in PostgreSQL' : 'Saved on this device'}
+          {remote ? 'Saved in MongoDB' : 'Saved on this device'}
           <p>Tenant: {effectiveRole.replaceAll('_', ' ')}</p>
           <div className="user">
             <span className="avatar">{effectiveRole.slice(0, 2).toUpperCase()}</span>
@@ -2326,7 +2326,7 @@ function App({
                   </label>
                   <p>
                     Currency: NGN · Storage:{' '}
-                    {remote ? 'PostgreSQL' : 'this browser'} · Access:{' '}
+                    {remote ? 'MongoDB' : 'this browser'} · Access:{' '}
                     {remote?.user.role || 'local owner'}
                   </p>
                   <button disabled={busy || readOnly} className="primary">

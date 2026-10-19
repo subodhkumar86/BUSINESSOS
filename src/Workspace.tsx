@@ -112,7 +112,7 @@ export default function Workspace() {
           <span>
             {demo
               ? 'Browser demo'
-              : `${snapshot!.user.name} · ${snapshot!.user.role} · PostgreSQL workspace`}
+              : `${snapshot!.user.name} · ${snapshot!.user.role} · MongoDB workspace`}
           </span>
           {error && <span role="alert">{error}</span>}
           <button onClick={() => void logout()}>
