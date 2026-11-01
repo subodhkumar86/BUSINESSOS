@@ -295,7 +295,7 @@ export function ShipmentsPanel({
                         <small>Movement: {row.stock_movement_id}</small>
                         <time>
                           {row.dispatched_at
-                            ? new Date(row.dispatched_at).toLocaleString()
+                            ? new Date(row.dispatched_at).toLocaleString('en-IN')
                             : ''}
                         </time>
                       </>

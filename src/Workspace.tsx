@@ -3,10 +3,12 @@ import App from './App'
 import { Marketing } from './Marketing'
 import { PasswordReset } from './PasswordReset'
 import { request, ApiError } from './api'
+import { useRef } from 'react'
+import { DEMO_EMAIL, DEMO_PASSWORD } from './demo-data'
+import { AuthPreview } from './WorkspaceVisuals'
 import type { Snapshot } from './types'
-import { useTheme } from './theme'
 export default function Workspace() {
-  const { theme, toggleTheme, isDark } = useTheme()
+  const authForm = useRef<HTMLFormElement>(null)
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [demo, setDemo] = useState(false),
     [loading, setLoading] = useState(true),
@@ -41,7 +43,7 @@ export default function Workspace() {
   }, [])
   useEffect(() => {
     let active = true
-    request<Snapshot>('/workspace')
+    request<Snapshot>('/workspace', { sessionRequired: false })
       .then((s) => {
         if (active) setSnapshot(s)
       })
@@ -79,6 +81,14 @@ export default function Workspace() {
       setError(e instanceof Error ? e.message : 'Could not sign out.')
     }
   }
+  function enterDemo() {
+    setSnapshot(null)
+    setDemo(true)
+    setError('')
+    setNotice('')
+    window.history.pushState({}, '', '/app/dashboard')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
   if (reset)
     return (
       <PasswordReset
@@ -97,9 +107,28 @@ export default function Workspace() {
   if (loading)
     return (
       <div className="auth-shell">
-        <div style={{ textAlign: 'center', display: 'grid', gap: '0.85rem', placeItems: 'center' }}>
-          <div className="logo" style={{ width: '3.25rem', height: '3.25rem', fontSize: '1.4rem', borderRadius: '14px' }}>B</div>
-          <p role="status" style={{ fontWeight: 600, fontSize: '0.92rem' }}>Connecting to your BusinessOS workspace…</p>
+        <div
+          style={{
+            textAlign: 'center',
+            display: 'grid',
+            gap: '0.85rem',
+            placeItems: 'center',
+          }}
+        >
+          <div
+            className="logo"
+            style={{
+              width: '3.25rem',
+              height: '3.25rem',
+              fontSize: '1.4rem',
+              borderRadius: '14px',
+            }}
+          >
+            B
+          </div>
+          <p role="status" style={{ fontWeight: 600, fontSize: '0.92rem' }}>
+            Connecting to your BusinessOS workspace…
+          </p>
         </div>
       </div>
     )
@@ -107,18 +136,30 @@ export default function Workspace() {
     return (
       <>
         <div className="session-bar">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <span className="logo" style={{ width: '1.4rem', height: '1.4rem', fontSize: '0.75rem', borderRadius: '6px' }}>B</span>
-          <span>
-            {demo
-              ? 'Browser demo'
-              : `${snapshot!.user.name} · ${snapshot!.user.role} · MongoDB workspace`}
-          </span>
-          {error && <span role="alert">{error}</span>}
-          <button onClick={() => void logout()}>
-            {demo ? 'Exit demo' : 'Sign out'}
-          </button>
-        </div>
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}
+          >
+            <span
+              className="logo"
+              style={{
+                width: '1.4rem',
+                height: '1.4rem',
+                fontSize: '0.75rem',
+                borderRadius: '6px',
+              }}
+            >
+              B
+            </span>
+            <span>
+              {demo
+                ? 'Browser demo'
+                : `${snapshot!.user.name} · ${snapshot!.user.role} · MongoDB workspace`}
+            </span>
+            {error && <span role="alert">{error}</span>}
+            <button onClick={() => void logout()}>
+              {demo ? 'Exit demo' : 'Sign out'}
+            </button>
+          </div>
         </div>
         <App
           key={snapshot?.user.id || 'demo'}
@@ -150,38 +191,49 @@ export default function Workspace() {
           <span className="logo">B</span>BusinessOS
         </div>
         <div>
-          <h2>Run the whole business from one place.</h2>
+          <span className="auth-kicker">LESS BUSYWORK. MORE POSSIBILITY.</span>
+          <h2>
+            Your business.
+            <br />A clearer picture.
+          </h2>
           <p>
             Finance, inventory, people and customer operations connected in a
             single workspace — with the audit trail to back every decision.
           </p>
+          <AuthPreview />
           <div className="auth-points">
             <div className="auth-point">
               <span className="auth-point-mark">1</span>
               <div>
                 <b>See what needs attention</b>
-                <span>Cash, receivables, stock and pipeline on one dashboard.</span>
+                <span>
+                  Cash, receivables, stock and pipeline on one dashboard.
+                </span>
               </div>
             </div>
             <div className="auth-point">
               <span className="auth-point-mark">2</span>
               <div>
                 <b>Keep control of access</b>
-                <span>Role-based permissions with read-only auditor accounts.</span>
+                <span>
+                  Role-based permissions with read-only auditor accounts.
+                </span>
               </div>
             </div>
             <div className="auth-point">
               <span className="auth-point-mark">3</span>
               <div>
                 <b>Trace every change</b>
-                <span>Posted journals and audit events retain their source.</span>
+                <span>
+                  Posted journals and audit events retain their source.
+                </span>
               </div>
             </div>
           </div>
         </div>
         <p className="auth-footnote">
-          BusinessOS records and coordinates business workflows. It does not hold
-          funds or guarantee statutory tax compliance.
+          BusinessOS records and coordinates business workflows. It does not
+          hold funds or guarantee statutory tax compliance.
         </p>
       </aside>
       <div className="auth-card">
@@ -200,7 +252,7 @@ export default function Workspace() {
             ? 'Request a reset code for your account. Local development can return a code; email delivery is not configured yet.'
             : register
               ? 'Start with your organisation and owner account.'
-              : 'Sign in to your business workspace.'}
+              : 'Your people, numbers and next moves. All right here.'}
         </p>
         {error && (
           <div role="alert" className="alert">
@@ -213,6 +265,7 @@ export default function Workspace() {
           </div>
         )}
         <form
+          ref={authForm}
           onSubmit={async (e) => {
             e.preventDefault()
             if (busy) return
@@ -220,6 +273,15 @@ export default function Workspace() {
             setError('')
             const values = Object.fromEntries(new FormData(e.currentTarget))
             try {
+              if (
+                !register &&
+                !recover &&
+                String(values.email).trim().toLowerCase() === DEMO_EMAIL &&
+                values.password === DEMO_PASSWORD
+              ) {
+                enterDemo()
+                return
+              }
               if (recover) {
                 const result = await request<{ developmentToken?: string }>(
                   '/auth/password-reset/request',
@@ -278,6 +340,12 @@ export default function Workspace() {
                   autoComplete="organization"
                 />
               </label>
+              <label>
+                Workspace currency
+                <select name="currency" defaultValue="INR">
+                  <option value="INR">INR — Indian rupee (UPI)</option>
+                </select>
+              </label>
             </>
           )}
           <label>
@@ -297,10 +365,23 @@ export default function Workspace() {
               />
             </label>
           )}
+          {!recover && !register && (
+            <label>
+              Authenticator code (if MFA is enabled)
+              <input
+                name="code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                placeholder="Six-digit code"
+              />
+            </label>
+          )}
           {register && !recover && (
             <label className="task">
-              <input type="checkbox" name="sample" /> Start with labelled sample
-              records
+              <input type="checkbox" name="sample" defaultChecked /> Start with
+              labelled sample records
             </label>
           )}
           <button className="primary" disabled={busy}>
@@ -313,31 +394,72 @@ export default function Workspace() {
                   : 'Sign in'}
           </button>
         </form>
+        {!register && !recover && (
+          <div className="demo-access-card">
+            <div>
+              <span className="demo-access-icon">↗</span>
+              <div>
+                <b>Take a look around</b>
+                <p>A workspace filled with sample data.</p>
+              </div>
+              <span className="badge">FREE DEMO</span>
+            </div>
+            <dl>
+              <div>
+                <dt>Email / ID</dt>
+                <dd>{DEMO_EMAIL}</dd>
+              </div>
+              <div>
+                <dt>Password</dt>
+                <dd>{DEMO_PASSWORD}</dd>
+              </div>
+            </dl>
+            <button
+              type="button"
+              onClick={() => {
+                const form = authForm.current
+                if (!form) return
+                ;(form.elements.namedItem('email') as HTMLInputElement).value =
+                  DEMO_EMAIL
+                ;(
+                  form.elements.namedItem('password') as HTMLInputElement
+                ).value = DEMO_PASSWORD
+                setError('')
+                setNotice('Demo credentials filled. Select Sign in to explore.')
+              }}
+            >
+              Use demo credentials <span aria-hidden="true">↗</span>
+            </button>
+            <small>
+              Demo login opens local sample data, not a live business account.
+            </small>
+          </div>
+        )}
         <div className="auth-links">
-        {!recover && (
+          {!recover && (
+            <button
+              className="text-button"
+              onClick={() => {
+                setRegister(!register)
+                setError('')
+              }}
+            >
+              {register
+                ? 'Already have an account? Sign in'
+                : 'Create a new workspace'}
+            </button>
+          )}
           <button
             className="text-button"
             onClick={() => {
-              setRegister(!register)
+              setRecover(!recover)
+              setRegister(false)
               setError('')
+              setNotice('')
             }}
           >
-            {register
-              ? 'Already have an account? Sign in'
-              : 'Create a new workspace'}
+            {recover ? 'Back to sign in' : 'Forgot password?'}
           </button>
-        )}
-        <button
-          className="text-button"
-          onClick={() => {
-            setRecover(!recover)
-            setRegister(false)
-            setError('')
-            setNotice('')
-          }}
-        >
-          {recover ? 'Back to sign in' : 'Forgot password?'}
-        </button>
         </div>
         <hr />
         {recover && (
@@ -352,24 +474,17 @@ export default function Workspace() {
           </button>
         )}
         <div className="auth-demo-actions">
+          <button onClick={enterDemo}>Explore browser demo</button>
           <button
+            className="text-button"
+            style={{ marginTop: '8px' }}
             onClick={() => {
-              setDemo(true)
-            setError('')
-          }}
-        >
-          Explore browser demo
-        </button>
-        <button
-          className="text-button"
-          style={{ marginTop: '8px' }}
-          onClick={() => {
-            setShowAuth(false)
-            window.history.pushState({}, '', '/')
-          }}
-        >
-          ← Back to BusinessOS Website
-        </button>
+              setShowAuth(false)
+              window.history.pushState({}, '', '/')
+            }}
+          >
+            ← Back to BusinessOS Website
+          </button>
         </div>
         <small>
           The demo stays in this browser. It is never uploaded automatically.

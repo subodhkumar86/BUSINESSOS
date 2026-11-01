@@ -1,8 +1,11 @@
-import { useState } from 'react'
+import { formatMoney } from './currency'
+import { useEffect, useState } from 'react'
+import { request } from './api'
 import type { Snapshot } from './types'
 
 interface Shipment {
   id: string
+  version?: number
   poRef: string
   supplier: string
   carrier: string
@@ -52,11 +55,30 @@ const initialShipments: Shipment[] = [
 export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
   const [shipments, setShipments] = useState<Shipment[]>(() => remote ? [] : initialShipments)
   const [notice, setNotice] = useState('')
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false)
 
-  const editable = !remote
+  const editable = !remote || ['owner', 'operations_manager'].includes(remote.user.role)
+  useEffect(() => {
+    if (!remote) return
+    let active = true
+    request<{ shipments: Shipment[] }>('/supply/shipments').then(result => { if (active) setShipments(result.shipments) }).catch(error => { if (active) setError(error.message) })
+    return () => { active = false }
+  }, [remote])
 
-  function handleAdvanceShipment(id: string) {
+  async function handleAdvanceShipment(id: string) {
     if (!editable) return
+    if (remote) {
+      const shipment = shipments.find(row => row.id === id)
+      if (!shipment || busy) return
+      const transitions = { booked: 'in_transit', in_transit: 'customs_cleared', customs_cleared: 'delivered' }
+      setBusy(true); setError(''); setNotice('')
+      try {
+        const updated = await request<Shipment>('/supply/shipments/' + id, { method: 'PATCH', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ version: shipment.version, status: transitions[shipment.status as keyof typeof transitions] }) })
+        setShipments(rows => rows.map(row => row.id === id ? updated : row)); setNotice('Inbound milestone saved. Receive the purchase order separately to post stock.')
+      } catch (error) { setError(error instanceof Error ? error.message : 'Could not update shipment.') }
+      finally { setBusy(false) }
+      return
+    }
     setShipments((prev) =>
       prev.map((s) => {
         if (s.id !== id) return s
@@ -78,7 +100,16 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
 
   return (
     <div className="module-panel">
-      <p className="notice">{remote ? 'Inbound carrier tracking is not configured. Receive purchase orders through Purchasing and manage stock through Warehouse Management.' : 'Sample planning board. Changes last for this session only.'}</p>
+      <p className="notice">{remote ? 'Record inbound milestones manually. Receive purchase orders through Purchasing to post inventory; carrier sync requires a provider.' : 'Sample planning board. Changes last for this session only.'}</p>
+      {error && <p role="alert" className="notice error">{error}</p>}
+      {remote && editable && <form className="operations-fields" onSubmit={async event => {
+        event.preventDefault(); const form = event.currentTarget, data = Object.fromEntries(new FormData(form)); setBusy(true); setError('')
+        try {
+          const created = await request<Shipment>('/supply/shipments', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify({ ...data, logisticsCost: Number(data.logisticsCost) }) })
+          setShipments(rows => [created, ...rows]); form.reset(); setNotice('Inbound shipment booked for manual tracking.')
+        } catch (error) { setError(error instanceof Error ? error.message : 'Could not create shipment.') }
+        finally { setBusy(false) }
+      }}><label>Purchase order<select name="purchaseOrderId" required><option value="">Select approved PO</option>{remote.state.orders.filter(o => ['Approved', 'Received'].includes(o.status)).map(o => <option key={o.id} value={o.id}>{o.name} — {o.id.slice(0, 8)}</option>)}</select></label>{[['carrier', 'Carrier'], ['trackingCode', 'Tracking code'], ['destination', 'Destination']].map(([name, label]) => <label key={name}>{label}<input name={name} required maxLength={200} /></label>)}<label>Expected arrival<input name="eta" type="date" required /></label><label>Estimated freight cost<input name="logisticsCost" type="number" min="0" step="0.01" required /></label><button disabled={busy}>Book inbound shipment</button></form>}
       {/* Metrics derive from the current planning board. */}
       <div className="stats-row">
         <div className="stat-card">
@@ -89,9 +120,9 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
         <div className="stat-card">
           <span className="stat-label">Freight Committed</span>
           <b className="stat-value">
-            ₦{shipments.reduce((acc, s) => acc + s.logisticsCost, 0).toLocaleString()}
+            {formatMoney(shipments.reduce((acc, s) => acc + s.logisticsCost, 0), remote?.state.currency || 'INR')}
           </b>
-          <small>Carrier logistics expense</small>
+          <small>Recorded freight estimates</small>
         </div>
         <div className="stat-card">
           <span className="stat-label">Customs cleared</span>
@@ -139,7 +170,7 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
                   <td><code>{s.trackingCode}</code></td>
                   <td>{s.destination}</td>
                   <td>{s.eta}</td>
-                  <td>₦{s.logisticsCost.toLocaleString()}</td>
+                  <td>{formatMoney(s.logisticsCost, remote?.state.currency || 'INR')}</td>
                   <td>
                     <span className={s.status === 'delivered' ? 'badge green' : 'badge'}>
                       {s.status.replace('_', ' ').toUpperCase()}
@@ -149,7 +180,8 @@ export function SupplyChainPanel({ remote }: { remote: Snapshot | null }) {
                     {s.status !== 'delivered' && editable ? (
                       <button
                         type="button"
-                        onClick={() => handleAdvanceShipment(s.id)}
+                        disabled={busy}
+                        onClick={() => void handleAdvanceShipment(s.id)}
                       >
                         Advance Milestone →
                       </button>

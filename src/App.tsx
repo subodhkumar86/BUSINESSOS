@@ -1,4 +1,12 @@
+import { paginateRecords } from './record-page'
+import { sortRecords } from './record-sort'
+import { csvText } from './csv'
+import { matchesRecord } from './record-search'
+import { formatMoney } from './currency'
 import { CompletionPanel } from './CompletionPanel'
+import { demoState } from './demo-data'
+import { DemoInsights } from './WorkspaceVisuals'
+import { UpiPanel } from './UpiPanel'
 import { BudgetPanel } from './BudgetPanel'
 import { RFQPanel } from './RFQPanel'
 import { OnboardingWizard } from './OnboardingWizard'
@@ -35,6 +43,7 @@ import { Team } from './Team'
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { useTheme } from './theme'
 import { CommandPalette } from './CommandPalette'
+import { parseBankCSV } from './bank-csv'
 
 function LeadScorePanel({ remote, state }: { remote: import('./types').Snapshot; state: import('./types').State }) {
   const [scores, setScores] = useState<{ leadId: string; name: string; status: string; score: number }[]>([])
@@ -73,7 +82,7 @@ import { FulfillmentPanel } from './FulfillmentPanel'
 import { Security } from './Security'
 import { RoleMatrix } from './RoleMatrix'
 import { AdminConsole } from './AdminConsole'
-import { seed, metrics, transition, stages } from './domain'
+import { metrics, transition, stages } from './domain'
 import './App.css'
 interface BankAccount {
   id: string
@@ -112,7 +121,7 @@ interface PayrollPaymentBatch {
 
 const pages: [string, string, string, string][] = [
   ['dashboard', 'Overview', '◫', 'CORE'],
-  ['finance', 'Finance & AR/AP', '₦', 'CORE'],
+  ['finance', 'Finance & AR/AP', '₹', 'CORE'],
   ['banking', 'Banking & Feeds', '🏦', 'CORE'],
   ['inventory', 'Inventory & Stock', '▦', 'CORE'],
   ['crm', 'Sales & CRM', '↗', 'CORE'],
@@ -189,6 +198,7 @@ const definitions: Record<
       ['name', 'Full name'],
       ['department', 'Department'],
       ['amount', 'Monthly gross salary', 'number'],
+      ['personalRelief', 'Monthly personal relief (INR)', 'number'],
     ],
   ],
   projects: [
@@ -200,25 +210,25 @@ const definitions: Record<
   ],
   tasks: ['Add task', [['name', 'Task']]],
 }
-function initial(): { data: State; error: string } {
+function initial(): { data: State; error: string; saved: string | null } {
   try {
     const data = localStorage.getItem('businessos-v1')
     if (data) {
       const parsed = JSON.parse(data)
       if (!Array.isArray(parsed.products) || !Array.isArray(parsed.journals))
         throw Error()
-      return { data: hydrateInventory(parsed), error: '' }
+      return { data: hydrateInventory({ ...parsed, currency: 'INR' }), error: '', saved: data }
     }
-    return { data: seed(), error: '' }
+    return { data: demoState(), error: '', saved: null }
   } catch {
     return {
-      data: seed(),
+      data: demoState(),
+      saved: null,
       error:
         'Saved data could not be read. Sample data is shown; export it before making changes.',
     }
   }
 }
-const loaded = initial()
 function App({
   remote,
   onSnapshot,
@@ -226,11 +236,18 @@ function App({
   remote: Snapshot | null
   onSnapshot: (s: Snapshot) => void
 }) {
+  const [loaded] = useState(initial)
+  const recordSearchRef = useRef<HTMLInputElement>(null)
+  const [tablePages, setTablePages] = useState<Record<string, number>>({})
+  const [tablePageSizes, setTablePageSizes] = useState<Record<string, number>>({})
+  const [tableSorts, setTableSorts] = useState<Record<string, { key: string; direction: 'asc' | 'desc' } | undefined>>({})
+  const storageBaseline = useRef(loaded.saved)
+  const storageReadable = useRef(!loaded.error)
   const [s, setS] = useState(remote?.state || loaded.data),
     [page, setPage] = useState(
       location.pathname.startsWith('/admin') ? 'admin' : location.pathname.split('/').pop() || 'dashboard',
     ),
-    [search, setSearch] = useState(''),
+    [search, setSearchValue] = useState(''),
     [modal, setModal] = useState<CreateCollection | 'payroll' | null>(null),
     [error, setError] = useState(remote ? '' : loaded.error),
     [notice, setNotice] = useState(''),
@@ -256,28 +273,59 @@ function App({
   const saving = useRef(false),
     [busy, setBusy] = useState(false)
   const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null)
-  const { theme, toggleTheme, isDark } = useTheme()
+  const { toggleTheme, isDark } = useTheme()
   const [cmdOpen, setCmdOpen] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  const dialogLauncher = useRef<HTMLElement | null>(null)
+  const drafts = useRef<Partial<Record<CreateCollection | 'payroll', Record<string, string>>>>({})
+  const [activeDraft, setActiveDraft] = useState<Record<string, string>>({})
+  function openModal(collection: CreateCollection | 'payroll') {
+    dialogLauncher.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setError('')
+    setActiveDraft({ ...drafts.current[collection] })
+    setModal(collection)
+  }
+  function closeModal(discard = false) {
+    if (!modal || saving.current) return
+    if (discard) delete drafts.current[modal]
+    else if (formRef.current) drafts.current[modal] = Object.fromEntries(new FormData(formRef.current)) as Record<string, string>
+    setModal(null)
+  }
+  useEffect(() => {
+    if (!modal || !dialogRef.current) return
+    const overlay = dialogRef.current.parentElement!
+    const background = Array.from(overlay.parentElement?.children || []).filter(element => element !== overlay) as HTMLElement[]
+    const previousInert = background.map(element => element.inert)
+    background.forEach(element => { element.inert = true })
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      background.forEach((element, index) => { element.inert = previousInert[index] })
+      document.body.style.overflow = previousOverflow
+      const launcher = dialogLauncher.current
+      if (document.activeElement === document.body)
+        (launcher?.isConnected ? launcher : document.querySelector<HTMLElement>('.app-header button[aria-label="Open command palette"]'))?.focus()
+    }
+  }, [modal])
   const effectiveRole: UserRole = simulatedRole || remote?.user.role || 'owner'
   const readOnly = effectiveRole === 'auditor'
+  function setSearch(value: string) { setSearchValue(value); setTablePages({}) }
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
+        if (modal) return
         setCmdOpen((prev) => !prev)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [modal])
   const m = metrics(s),
     money = (v: unknown) =>
-      new Intl.NumberFormat('en-NG', {
-        style: 'currency',
-        currency: s.currency,
-        maximumFractionDigits: 0,
-      }).format(Number(v))
+      formatMoney(Number(v), s.currency)
   const activeBankAccount =
     bankAccounts.find((account) => account.id === selectedBankAccountId) ||
     bankAccounts[0]
@@ -398,21 +446,29 @@ function App({
     if (saving.current) return false
     saving.current = true
     setBusy(true)
+    let responseNotice = ''
     try {
       if (remote) {
         const next = await saveAction(remote, a, crypto.randomUUID())
+        responseNotice = next.notice || ''
         setS(next.state)
         onSnapshot(next)
       } else {
+        if (!storageReadable.current) throw Error('Saved demo data could not be read. Export the sample view or reset sample data before saving.')
+        if (localStorage.getItem('businessos-v1') !== storageBaseline.current)
+          throw Error('Demo records changed in another tab. Reload this page before saving; your form has not been cleared.')
         const next = transition(s, a)
-        localStorage.setItem('businessos-v1', JSON.stringify(next))
+        const serialized = JSON.stringify(next)
+        localStorage.setItem('businessos-v1', serialized)
+        storageBaseline.current = serialized
         setS(next)
       }
+      if (modal) delete drafts.current[modal]
       setModal(null)
       setError('')
       setNotice(
         remote
-          ? 'Changes saved to MongoDB.'
+          ? responseNotice || 'Changes saved to MongoDB.'
           : 'Changes saved to this browser.',
       )
       return true
@@ -452,7 +508,7 @@ function App({
       return
     }
     const rows = [
-      ['Metric', 'NGN'],
+      ['Metric', s.currency],
       ['Cash', m.cash],
       ['Collected revenue', m.revenue],
       ['Receivables', m.receivables],
@@ -461,9 +517,9 @@ function App({
       ['Open pipeline', m.pipeline],
     ]
     download(
-      rows.map((r) => r.join(',')).join('\n'),
+      csvText(rows),
       'businessos-report.csv',
-      'text/csv',
+      'text/csv;charset=utf-8',
     )
   }
   const action = (collection: string, id: string, status: string) =>
@@ -477,7 +533,7 @@ function App({
       className="primary"
       onClick={() => {
         setError('')
-        setModal(collection)
+        openModal(collection)
       }}
     >
       + {definitions[collection][0]}
@@ -497,24 +553,66 @@ function App({
     columns: [string, string, ((value: never, row: Row<K>) => ReactNode)?][],
     actions?: (row: Row<K>) => ReactNode,
   ) {
-    const rows = (s[collection] as Row<K>[]).filter((r) =>
-      Object.values(r as object).some((v) =>
-        String(v).toLowerCase().includes(search.toLowerCase()),
-      ),
-    )
+    const total = (s[collection] as Row<K>[]).length
+    const filtered = (s[collection] as Row<K>[]).filter(r => matchesRecord(Object.values(r as object), search))
+    const canExport = !remote || includesFeature(remote.entitlements, 'reports')
+    const monetary = new Set(['amount', 'cost', 'salary', 'personalRelief'])
+    function columnValue(row: Row<K>, [key, , format]: (typeof columns)[number]) {
+        const raw = (row as Record<string, unknown>)[key]
+        if (collection === 'orders' && key === 'cost') {
+          const order = row as unknown as { qty: number; cost: number }
+          return Math.round(order.qty * order.cost * 100) / 100
+        }
+        if (typeof raw === 'number') return raw
+        const displayed = format?.(raw as never, row)
+        return typeof displayed === 'string' || typeof displayed === 'number' ? displayed : raw
+    }
+    const sort = tableSorts[collection]
+    const sortColumn = sort && columns.find(([key]) => key === sort.key)
+    const rows = sort && sortColumn ? sortRecords(filtered, row => {
+      const raw = (row as Record<string, unknown>)[sortColumn[0]]
+      if (/(?:date|At)$/.test(sortColumn[0]) && typeof raw === 'string' && Number.isFinite(Date.parse(raw))) return Date.parse(raw)
+      return columnValue(row, sortColumn)
+    }, sort.direction) : filtered
+    const paging = paginateRecords(rows, tablePages[collection], tablePageSizes[collection])
+    function setTablePage(page: number) { setTablePages(previous => ({ ...previous, [collection]: page })) }
+    function toggleSort(key: string) {
+      setTablePage(0)
+      setTableSorts(previous => {
+        const current = previous[collection]
+        const next = current?.key !== key ? { key, direction: 'asc' as const } :
+          current.direction === 'asc' ? { key, direction: 'desc' as const } : undefined
+        return { ...previous, [collection]: next }
+      })
+    }
+    function exportVisible() {
+      if (!rows.length || !canExport) return
+      const headings = columns.map(([key, label]) => monetary.has(key) ? label + ' (' + s.currency + ')' : label)
+      const values = rows.map(row => columns.map(column => columnValue(row, column)))
+      download(csvText([headings, ...values]), 'businessos-' + collection + '-' + new Date().toISOString().slice(0, 10) + '.csv', 'text/csv;charset=utf-8')
+      setNotice(rows.length + ' matching ' + collection + ' records exported.')
+    }
     return (
       <div className="table-scroll">
+        <div className="table-export-bar">
+          <p className="table-summary">Showing {paging.from === paging.to ? paging.to : `${paging.from}-${paging.to}`} of {rows.length} records{search.trim() ? ` matching "${search.trim()}" (${total} total)` : ''}</p>
+          <button type="button" aria-label={`Export ${collection} CSV`} disabled={!rows.length || !canExport} title={canExport ? 'Download all matching records across every page' : 'Your plan does not include reports'} onClick={exportVisible}>Export CSV ({rows.length})</button>
+        </div>
         <table>
           <thead>
             <tr>
               {columns.map(([key, label]) => (
-                <th key={key}>{label}</th>
+                <th key={key} aria-sort={sort?.key === key ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                  <button type="button" className="text-button table-sort" title={sort?.key === key ? (sort.direction === 'asc' ? 'Sort descending' : 'Restore original order') : 'Sort ascending'} aria-label={`Sort ${label}`} onClick={() => toggleSort(key)}>
+                    {label}<span className="sort-icon" aria-hidden="true">{sort?.key === key ? (sort.direction === 'asc' ? '\u2191' : '\u2193') : '\u2195'}</span>
+                  </button>
+                </th>
               ))}
               {actions && <th>Action</th>}
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {paging.rows.map((r) => (
               <tr key={(r as { id: string }).id}>
                 {columns.map(([key, , format]) => (
                   <td key={key}>
@@ -528,9 +626,20 @@ function App({
             ))}
           </tbody>
         </table>
+        {rows.length > 0 && <nav className="table-pagination" aria-label={`${collection} pagination`}>
+          <label>Rows per page <select aria-label={`Rows per page for ${collection}`} value={paging.size} onChange={event => { setTablePageSizes(previous => ({ ...previous, [collection]: Number(event.target.value) })); setTablePage(0) }}>
+            {[10, 25, 50].map(size => <option key={size} value={size}>{size}</option>)}
+          </select></label>
+          <span aria-live="polite">Page {paging.page + 1} of {paging.pageCount}</span>
+          <div>
+            <button type="button" className="text-button" aria-label={`Previous ${collection} page`} disabled={paging.page === 0} onClick={() => setTablePage(paging.page - 1)}>Previous</button>
+            <button type="button" className="text-button" aria-label={`Next ${collection} page`} disabled={paging.page + 1 >= paging.pageCount} onClick={() => setTablePage(paging.page + 1)}>Next</button>
+          </div>
+        </nav>}
         {!rows.length && (
           <p className="empty">
-            No records found. Add a record or change your search.
+            {total ? 'No records match your search.' : 'No records yet. New records will appear here.'}
+            {search.trim() && <button type="button" onClick={() => { setSearch(''); recordSearchRef.current?.focus() }}>Clear record search</button>}
           </p>
         )}
       </div>
@@ -594,6 +703,7 @@ function App({
       'Workspace preferences, data exports, and activity history.',
     ],
     budgets: ['Control spending before it happens.', 'Department budgets, variance tracking, and period analysis.'],
+    completion: ['Keep approvals and workspace controls accountable.', 'Approval chains, branch directory, scenario history, delivery and backups.'],
     rfq: ['Get the best price before committing.', 'Request, compare, and accept supplier quotations.'],
     billing: ['Turn growth into a system.', 'Plans, usage, and entitlements for the whole organisation.'],
     documents: ['Keep the source of truth close.', 'Contracts, receipts, policies, and versions in one place.'],
@@ -641,7 +751,7 @@ function App({
       supply: ['operations_manager'],
       compliance: ['finance_admin', 'operations_manager', 'hr_admin', 'super_admin'],
       billing: ['finance_admin'],
-      completion: ['finance_admin', 'hr_admin', 'operations_manager'],
+      completion: ['finance_admin', 'hr_admin', 'operations_manager', 'department_manager'],
       budgets: ['finance_admin'],
       rfq: ['operations_manager'],
       ai: ['finance_admin', 'hr_admin', 'operations_manager', 'sales_crm_user'],
@@ -910,7 +1020,8 @@ function App({
           </div>
         </header>
         <main id="main-content" tabIndex={-1}>
-          <div className="page-heading">
+          {!remote && <div className="demo-workspace-note"><span><i />DEMO WORKSPACE <small>Sample records. Real possibilities.</small></span><button disabled={readOnly || busy} onClick={() => { try { const fresh = demoState(); const serialized = JSON.stringify(fresh); localStorage.setItem('businessos-v1', serialized); storageBaseline.current = serialized; storageReadable.current = true; setS(fresh); setError(''); setNotice('Fresh sample data saved to this browser. Your live business records are unchanged.'); } catch { setError('Sample data could not be reset because browser storage is unavailable or full.'); } }}>Reset sample data ↻</button></div>}
+          <div className="page-heading" key={`heading-${current}`}>
             <div>
               <p className="eyebrow">BUSINESS AT A GLANCE</p>
               <h1>{titles[current][0]}</h1>
@@ -946,7 +1057,6 @@ function App({
           )}
           {current === 'dashboard' && (
             <>
-              <OnboardingWizard remote={remote} onNavigate={navigate} />
               <div className="welcome">
                 <div>
                   <span className="badge">YOUR OPERATING PULSE</span>
@@ -987,6 +1097,8 @@ function App({
                 ],
                 ['Sales pipeline', money(m.pipeline), 'Open opportunities'],
               ])}
+              {!remote && <DemoInsights state={s} />}
+              <OnboardingWizard remote={remote} onNavigate={navigate} />
               <div className="two-col">
                 {section(
                   'Sales pipeline',
@@ -1063,7 +1175,7 @@ function App({
                         <span className="activity-dot" />
                         <b>{a.entity}</b>
                         <span>{a.detail}</span>
-                        <small>{new Date(a.date).toLocaleString()}</small>
+                        <small>{new Date(a.date).toLocaleString('en-IN')}</small>
                       </div>
                     ))}
                   </div>
@@ -1075,17 +1187,17 @@ function App({
               )}
             </>
           )}
-          {current !== 'dashboard' &&
-            current !== 'ai' &&
-            current !== 'settings' &&
-            current !== 'admin' && (
+          {['finance', 'inventory', 'crm', 'procurement', 'hr', 'projects'].includes(current) && (
               <div className="toolbar">
                 <input
+                  ref={recordSearchRef}
                   aria-label="Search records"
+                  onKeyDown={event => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch('') } }}
                   placeholder="Search records…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
+                {search && <button type="button" onClick={() => { setSearch(''); recordSearchRef.current?.focus() }}>Clear record search</button>}
                 <span>
                   {remote ? 'Records saved to server' : 'Records saved locally'}
                 </span>
@@ -1187,7 +1299,8 @@ function App({
                     >
                       <input name="name" placeholder="Account name" required />
                       <input name="externalRef" placeholder="Account reference" required />
-                      <select name="currency" defaultValue="NGN" aria-label="Account currency">
+                      <select name="currency" defaultValue={s.currency} aria-label="Account currency">
+                        <option>INR</option>
                         <option>NGN</option>
                         <option>USD</option>
                         <option>GBP</option>
@@ -1277,29 +1390,7 @@ function App({
                             return
                           }
                           try {
-                            const lines = (await file.text())
-                              .split(/\r?\n/)
-                              .map((line) => line.trim())
-                              .filter(Boolean)
-                            const headers = (lines.shift() || '')
-                              .split(',')
-                              .map((header) => header.trim().toLowerCase())
-                            const required = ['externalref', 'occurredat', 'amount', 'direction', 'reference']
-                            if (required.some((header) => !headers.includes(header))) {
-                              setError('CSV must contain: externalRef, occurredAt, amount, direction, reference.')
-                              return
-                            }
-                            const transactions = lines.map((line) => {
-                              const values = line.split(',').map((value) => value.trim())
-                              const value = (header: string) => values[headers.indexOf(header)] || ''
-                              return {
-                                externalRef: value('externalref'),
-                                occurredAt: new Date(value('occurredat')).toISOString(),
-                                amount: Number(value('amount')),
-                                direction: value('direction').toLowerCase(),
-                                reference: value('reference'),
-                              }
-                            })
+                            const transactions = parseBankCSV(await file.text())
                             const result = await request<{ imported: number; skipped: number; suggested: number }>(
                               `/banks/accounts/${activeBankAccount.id}/transactions/import`,
                               {
@@ -1385,6 +1476,7 @@ function App({
                 ),
                 add('invoices'),
               )}
+              {remote && ['owner', 'finance_admin', 'auditor'].includes(remote.user.role) && <UpiPanel csrf={remote.csrf} owner={remote.user.role === 'owner'} canRecord={['owner', 'finance_admin'].includes(remote.user.role)} currency={s.currency} onRefresh={refreshWorkspace} />}
               {section(
                 'Expenses',
                 table('expenses', [
@@ -1466,7 +1558,7 @@ function App({
                     </>
                   ) : (
                     <p className="empty">
-                      No bank account is connected yet. Add a manual account or connect via Open Banking to start reconciliation.
+                      Add a manual bank account and import bank statements to start reconciliation.
                     </p>
                   )}
                   <form
@@ -1490,7 +1582,7 @@ function App({
                         const result = await request<{ accounts: BankAccount[] }>('/banks/accounts')
                         setBankAccounts(result.accounts)
                         form.reset()
-                        setNotice('Bank account connected successfully.')
+                        setNotice('Manual bank account added. Import statements to reconcile receipts.')
                       } catch (error) {
                         setError(error instanceof Error ? error.message : 'Could not add bank account.')
                       }
@@ -1498,19 +1590,18 @@ function App({
                   >
                     <input name="name" placeholder="Account name (e.g. Zenith Corporate)" required />
                     <input name="externalRef" placeholder="Account number / IBAN" required />
-                    <select name="provider" defaultValue="mono" aria-label="Provider">
-                      <option value="mono">Mono Open Banking</option>
-                      <option value="stitch">Stitch Financial</option>
+                    <select name="provider" defaultValue="manual" aria-label="Provider">
                       <option value="manual">Manual Ledger Feed</option>
                     </select>
-                    <select name="currency" defaultValue="NGN" aria-label="Account currency">
+                    <select name="currency" defaultValue={s.currency} aria-label="Account currency">
+                      <option>INR</option>
                       <option>NGN</option>
                       <option>USD</option>
                       <option>GBP</option>
                       <option>EUR</option>
                     </select>
                     <button className="primary" disabled={busy || bankLoading || readOnly}>
-                      + Connect Account
+                      + Add manual account
                     </button>
                   </form>
                 </>,
@@ -1877,9 +1968,10 @@ function App({
               ),
               add('orders'),
             )}
-          {current === 'hr' && <><RecruitmentPanel remote={remote} /><WorkflowPanel kind="leave" remote={remote} state={s} /><WorkflowPanel kind="goals" remote={remote} state={s} /><WorkflowPanel kind="reviews" remote={remote} state={s} /></>}
-          {current === 'hr' && <Payslips state={s} />}
-          {current === 'hr' && (
+          {current === 'hr' && <>{effectiveRole !== 'employee' && <RecruitmentPanel remote={remote} />}<WorkflowPanel kind="leave" remote={remote} state={s} /><WorkflowPanel kind="goals" remote={remote} state={s} />{effectiveRole !== 'employee' && <WorkflowPanel kind="reviews" remote={remote} state={s} />}</>}
+          {current === 'hr' && effectiveRole !== 'employee' && <Payslips state={s} />}
+          {current === 'hr' && effectiveRole === 'employee' && section('My employee record', table('employees', [['name', 'Employee'], ['department', 'Department']]))}
+          {current === 'hr' && effectiveRole !== 'employee' && (
             <>
               {section(
                 'Employees',
@@ -1948,7 +2040,7 @@ function App({
                   <button
                   disabled={busy || readOnly}
                   className="primary"
-                  onClick={() => setModal('payroll')}
+                  onClick={() => openModal('payroll')}
                 >
                   + Prepare payroll
                   </button>
@@ -1964,7 +2056,7 @@ function App({
                         <div className="preview-row" key={run.id}>
                           <div>
                             <b>{run.name}</b>
-                            <small>{batch ? `Batch ${batch.id.slice(0, 8)} · ${new Date(batch.created_at).toLocaleString()}` : 'No payment batch generated'}</small>
+                            <small>{batch ? `Batch ${batch.id.slice(0, 8)} · ${new Date(batch.created_at).toLocaleString('en-IN')}` : 'No payment batch generated'}</small>
                           </div>
                           <span className={batch?.status === 'confirmed' ? 'badge green' : 'badge'}>
                             {batch?.status || 'unpaid'}
@@ -1975,9 +2067,8 @@ function App({
                   </div>,
                 )}
               <p className="footnote">
-                Gross payroll only. Country-specific deductions, payslips, and
-                payment providers are not configured. Approval records an
-                accrual; it does not send money.
+                Payroll uses the run's recorded rules and employee inputs.
+                Approval posts an accrual; provider payment confirmation is separate.
               </p>
             </>
           )}
@@ -2012,7 +2103,7 @@ function App({
                 <div className="attention">
                   {s.tasks
                     .filter((t) =>
-                      t.name.toLowerCase().includes(search.toLowerCase()),
+                      matchesRecord(Object.values(t), search),
                     )
                     .map((t) => (
                       <label className="task" key={t.id}>
@@ -2305,7 +2396,7 @@ function App({
             <>
               <RoleMatrix />
               {remote && <Security csrf={remote.csrf} />}
-              {remote?.user.role === 'owner' && <Team csrf={remote.csrf} />}
+              {remote?.user.role === 'owner' && <Team csrf={remote.csrf} employees={s.employees} />}
               {remote?.user.role === 'owner' && <ConnectorsPanel csrf={remote.csrf} plan={remote.entitlements?.plan} />}
               {section(
                 'Organisation',
@@ -2325,7 +2416,7 @@ function App({
                     <input name="name" required defaultValue={s.organisation} />
                   </label>
                   <p>
-                    Currency: NGN · Storage:{' '}
+                    Currency: {s.currency} · Storage:{' '}
                     {remote ? 'MongoDB' : 'this browser'} · Access:{' '}
                     {remote?.user.role || 'local owner'}
                   </p>
@@ -2365,7 +2456,7 @@ function App({
                       <tbody>
                         {(remote ? auditLogs : s.audit).map((entry) => (
                           <tr key={entry.id}>
-                            <td>{new Date(entry.date).toLocaleString()}</td>
+                            <td>{new Date(entry.date).toLocaleString('en-IN')}</td>
                             <td>{entry.actor}</td>
                             <td>{entry.entity}</td>
                             <td>{entry.action}</td>
@@ -2397,21 +2488,21 @@ function App({
           {current === 'compliance' && <><WorkflowPanel kind="certifications" remote={remote} state={s} /><WorkflowPanel kind="findings" remote={remote} state={s} /></>}
           {current === 'tax' && <TaxPanel remote={remote} />}
           {current === 'supply' && <SupplyChainPanel remote={remote} />}
-          {current === 'automation' && <AutomationPanel remote={remote} />}
+          {current === 'automation' && <AutomationPanel remote={remote} onRefresh={refreshWorkspace} />}
           {current === 'workspace' && <VirtualWorkspace remote={remote} state={s} />}
-          {current === 'billing' && <BillingPanel />}
+          {current === 'billing' && <BillingPanel remote={remote} />}
           {current === 'completion' && <CompletionPanel remote={remote} />}
-          {current === 'budgets' && <BudgetPanel remote={remote} />}
+          {current === 'budgets' && <BudgetPanel remote={remote} onRefresh={refreshWorkspace} />}
           {current === 'rfq' && <RFQPanel remote={remote} />}
           {current === 'crm' && <Customers remote={remote} />}
           {current === 'crm' && remote && ['owner','sales_crm_user','finance_admin','auditor'].includes(effectiveRole) && (
             <LeadScorePanel remote={remote} state={s} />
           )}
-          {current === 'crm' && <OperationsPanel module="campaigns" remote={remote} />}
-          {operations[current] && <OperationsPanel key={current} module={current} remote={remote} />}
+          {current === 'crm' && <OperationsPanel module="campaigns" remote={remote} demoRole={effectiveRole} />}
+          {operations[current] && <OperationsPanel key={current} module={current} remote={remote} demoRole={effectiveRole} onRefresh={refreshWorkspace} />}
           <footer>
             BusinessOS <span>One workspace. A clearer business.</span>
-            <small>{remote ? 'Server MVP · NGN' : 'Local MVP · NGN'}</small>
+            <small>{remote ? 'Server workspace' : 'Local demo'} · {s.currency}</small>
           </footer>
         </main>
       </div>
@@ -2419,19 +2510,20 @@ function App({
         <div
           className="overlay"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setModal(null)
+            if (e.target === e.currentTarget) closeModal()
           }}
         >
           <div
             className="modal"
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="modal-title"
             onKeyDown={(e) => {
-              if (e.key === 'Escape') setModal(null)
+              if (e.key === 'Escape') { e.preventDefault(); closeModal() }
               if (e.key === 'Tab') {
                 const els = [
-                  ...e.currentTarget.querySelectorAll('button,input,select'),
+                  ...e.currentTarget.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]'),
                 ]
                 const first = els[0],
                   last = els.at(-1)
@@ -2451,7 +2543,7 @@ function App({
                   ? 'Prepare payroll'
                   : definitions[modal][0]}
               </h2>
-              <button aria-label="Close dialog" onClick={() => setModal(null)}>
+              <button aria-label="Close dialog" disabled={busy} onClick={() => closeModal()}>
                 ×
               </button>
             </div>
@@ -2460,10 +2552,14 @@ function App({
                 {error}
               </div>
             )}
+            <p className="footnote">Closing keeps these entries while this workspace stays open. Discard draft to clear them.</p>
             <form
+              key={modal}
+              ref={formRef}
               onSubmit={(e) => {
                 e.preventDefault()
                 const data = Object.fromEntries(new FormData(e.currentTarget))
+                if (data.personalRelief === '') delete data.personalRelief
                 if (modal === 'payroll')
                   commit({ type: 'payroll', period: String(data.period) })
                 else {
@@ -2488,9 +2584,9 @@ function App({
                 : definitions[modal][1]
               ).map(([name, label, type], i) => (
                 <label key={name}>
-                  {label}
+                  {label.replace('INR', s.currency)}
                   {type === 'product' ? (
-                    <select name={name} required autoFocus={i === 0}>
+                    <select name={name} defaultValue={activeDraft[name]} required autoFocus={i === 0}>
                       {s.products.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
@@ -2500,12 +2596,13 @@ function App({
                   ) : (
                     <input
                       autoFocus={i === 0}
+                      defaultValue={activeDraft[name]}
                       name={name}
                       type={type || 'text'}
-                      required
+                      required={name !== 'personalRelief'}
                       min={
                         type === 'number'
-                          ? ['qty', 'min'].includes(name)
+                          ? ['qty', 'min', 'personalRelief'].includes(name)
                             ? 0
                             : 0.01
                           : undefined
@@ -2522,7 +2619,8 @@ function App({
                 </label>
               ))}
               <div className="modal-actions">
-                <button type="button" onClick={() => setModal(null)}>
+                <button type="button" disabled={busy} onClick={() => closeModal(true)}>Discard draft</button>
+                <button type="button" disabled={busy} onClick={() => closeModal()}>
                   Cancel
                 </button>
                 <button disabled={busy || readOnly} className="primary">
@@ -2537,7 +2635,7 @@ function App({
         isOpen={cmdOpen}
         onClose={() => setCmdOpen(false)}
         onNavigate={navigate}
-        onOpenCreateModal={(col) => setModal(col)}
+        onOpenCreateModal={openModal}
         onToggleTheme={toggleTheme}
         isDark={isDark}
         effectiveRole={effectiveRole}
@@ -2550,6 +2648,8 @@ function App({
             if (aiInput) aiInput.focus()
           }, 100)
         }}
+        state={s}
+        onRecordSelect={(page, name) => { navigate(page); setSearch(name) }}
         onExportCsv={csv}
       />
     </div>

@@ -41,6 +41,7 @@ export function WarehouseTransfers({ remote }: { remote: Snapshot | null }) {
     }
   }, [remote])
   if (!remote) return <p>Sign in to transfer warehouse stock.</p>
+  const editable = ['owner', 'operations_manager'].includes(remote.user.role)
   const locationName = (id: string | null) =>
     locations.find((l) => l.id === id)?.name || (id ? id : 'Unallocated stock')
   return (
@@ -54,7 +55,16 @@ export function WarehouseTransfers({ remote }: { remote: Snapshot | null }) {
       </div>
       {error && <p className="notice error" role="alert">{error}</p>}
       {notice && <p className="notice success" role="status">{notice}</p>}
-      <form
+      {editable && <form className="operations-fields" onSubmit={async event => {
+        event.preventDefault(); if (busy) return
+        const form = event.currentTarget, values = Object.fromEntries(new FormData(form)); setBusy(true); setError('')
+        try {
+          const created = await request<{ id: string; name: string }>('/warehouse/locations', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf }, body: JSON.stringify(values) })
+          setLocations(current => [...current, created]); form.reset(); setNotice('Warehouse location created.')
+        } catch (error) { setError(error instanceof Error ? error.message : 'Could not create location.') }
+        finally { setBusy(false) }
+      }}><label>Location name<input name="name" required maxLength={160} /></label><label>Location code<input name="code" required maxLength={40} /></label><button disabled={busy}>Add warehouse location</button></form>}
+      {editable && <form
         onSubmit={async (e) => {
           e.preventDefault()
           if (saving.current) return
@@ -151,7 +161,7 @@ export function WarehouseTransfers({ remote }: { remote: Snapshot | null }) {
           </label>
           <button className="primary" disabled={!locations.length || !remote.state.products.length}>{busy ? 'Transferring...' : 'Transfer stock'}</button>
         </fieldset>
-      </form>
+      </form>}
       <div className="table-scroll">
         <table>
           <thead>

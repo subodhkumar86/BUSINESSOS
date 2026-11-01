@@ -102,7 +102,7 @@ export function VirtualWorkspace({
       <section className="card">
         <div className="section-header"><div><h2>Team chat</h2><small>Tenant-private messages for your workspace.</small></div></div>
         <div className="preview-list">
-          {messages.map((item) => <article className="preview-row" key={item.id}><div><b>{item.sender_name}</b><small>{item.body}</small></div><small>{new Date(item.created_at).toLocaleString()}</small></article>)}
+          {messages.map((item) => <article className="preview-row" key={item.id}><div><b>{item.sender_name}</b><small>{item.body}</small></div><small>{new Date(item.created_at).toLocaleString('en-IN')}</small></article>)}
           {!messages.length && !loading && <p className="empty">No messages yet. Start the conversation.</p>}
         </div>
         {remote?.user.role !== 'auditor' && <form className="inline-form" onSubmit={(event) => void sendMessage(event)}><input value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} placeholder="Write a team message" required /><button className="primary">Send message</button></form>}
@@ -121,7 +121,7 @@ export function VirtualWorkspace({
               <h3>{item.title}</h3>
               <p>{item.body}</p>
               <time dateTime={item.created_at}>
-                {new Date(item.created_at).toLocaleString()}
+                {new Date(item.created_at).toLocaleString('en-IN')}
               </time>
             </article>
           ))

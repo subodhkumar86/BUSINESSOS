@@ -1,7 +1,6 @@
 import { createHmac } from 'node:crypto'
-const provider = (process.env.NOTIFY_PROVIDER || 'local-log')
-  .trim()
-  .slice(0, 40)
+const providerName = () =>
+  (process.env.NOTIFY_PROVIDER || 'local-log').trim().slice(0, 40)
 type OutboxMessage = {
   id: string
   tenant_id: string
@@ -12,6 +11,7 @@ type OutboxMessage = {
   attempts: number
 }
 export function deliveryAdapter() {
+  const provider = providerName()
   const endpoint = process.env.NOTIFY_WEBHOOK_URL?.trim()
   if (provider !== 'webhook')
     return {
@@ -28,9 +28,18 @@ export function deliveryAdapter() {
     }
   try {
     const url = new URL(endpoint)
+    if (url.username || url.password || url.hash)
+      return {
+        provider,
+        configured: false,
+        reason:
+          'Notification webhook URLs cannot contain credentials or fragments.',
+      }
     if (
       url.protocol !== 'https:' &&
-      !['localhost', '127.0.0.1'].includes(url.hostname)
+      (process.env.NODE_ENV === 'production' ||
+        url.protocol !== 'http:' ||
+        !['localhost', '127.0.0.1'].includes(url.hostname))
     )
       return {
         provider,
@@ -45,9 +54,24 @@ export function deliveryAdapter() {
       reason: 'NOTIFY_WEBHOOK_URL is not a valid URL.',
     }
   }
+  if (
+    process.env.NODE_ENV === 'production' &&
+    (process.env.DELIVERY_WEBHOOK_SECRET || '').trim().length < 32
+  )
+    return {
+      provider,
+      configured: false,
+      reason:
+        'Set DELIVERY_WEBHOOK_SECRET to at least 32 characters before production delivery.',
+    }
   return { provider, configured: true as const, endpoint }
 }
 export function signDelivery(id: string) {
+  if (
+    process.env.NODE_ENV === 'production' &&
+    (process.env.DELIVERY_WEBHOOK_SECRET || '').trim().length < 32
+  )
+    throw new Error('Production delivery requires a configured signing secret.')
   const secret =
     process.env.DELIVERY_WEBHOOK_SECRET ||
     'local-delivery-secret-min-32-chars-0000'
@@ -75,6 +99,7 @@ export async function deliverMessage(message: OutboxMessage) {
   try {
     const response = await fetch(adapter.endpoint!, {
       method: 'POST',
+      redirect: 'error',
       signal: controller.signal,
       headers: {
         'content-type': 'application/json',

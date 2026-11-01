@@ -156,7 +156,7 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
         <div className="preview-tabs">
           {[
             { id: 'overview', label: 'Operating Pulse', icon: '◫' },
-            { id: 'finance', label: 'Finance & Bank Feeds', icon: '₦' },
+            { id: 'finance', label: 'Finance & Bank Feeds', icon: '₹' },
             { id: 'inventory', label: 'Inventory & Reorders', icon: '▦' },
             { id: 'ai', label: 'BI & AI Intelligence', icon: '✧' },
           ].map((t) => (
@@ -176,23 +176,23 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
             <div className="preview-grid">
               <div className="preview-kpi-card">
                 <span className="kpi-label">Available Cash (GL 1010)</span>
-                <span className="kpi-val">₦14,850,000</span>
+                <span className="kpi-val">₹1,48,50,000</span>
                 <span className="kpi-sub green">+18.4% vs last month</span>
               </div>
               <div className="preview-kpi-card">
                 <span className="kpi-label">Open Receivables (AR)</span>
-                <span className="kpi-val">₦4,200,000</span>
+                <span className="kpi-val">₹42,00,000</span>
                 <span className="kpi-sub">12 pending customer invoices</span>
               </div>
               <div className="preview-kpi-card">
                 <span className="kpi-label">Stock Valuation</span>
-                <span className="kpi-val">₦9,450,000</span>
+                <span className="kpi-val">₹94,50,000</span>
                 <span className="kpi-sub green">98.2% in healthy band</span>
               </div>
               <div className="preview-kpi-card">
                 <span className="kpi-label">Operational Runway</span>
                 <span className="kpi-val">7.8 months</span>
-                <span className="kpi-sub green">Burn: ₦1.9M/mo</span>
+                <span className="kpi-sub green">Burn: ₹1.9M/mo</span>
               </div>
 
               <div className="preview-panel-wide">
@@ -204,21 +204,21 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
                       <span>Customer Collections & Settled AR</span>
-                      <b>₦18,200,000</b>
+                      <b>₹1,82,00,000</b>
                     </div>
                     <div className="track"><span style={{ width: '85%', background: '#10b981' }} /></div>
                   </div>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
                       <span>Gross Payroll Accrual (18 Staff)</span>
-                      <b>₦4,650,000</b>
+                      <b>₹46,50,000</b>
                     </div>
                     <div className="track"><span style={{ width: '32%', background: '#3b82f6' }} /></div>
                   </div>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
                       <span>Supplier POs & Operational Expenses</span>
-                      <b>₦3,800,000</b>
+                      <b>₹38,00,000</b>
                     </div>
                     <div className="track"><span style={{ width: '28%', background: '#f59e0b' }} /></div>
                   </div>
@@ -245,21 +245,21 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
                     <tr>
                       <td><b>TXN-2026-089</b><br/><small>Access Bank Feed</small></td>
                       <td>Invoice #1042 · Dangote Sugar</td>
-                      <td><b>₦3,500,000</b></td>
+                      <td><b>₹35,00,000</b></td>
                       <td><span className="badge green">Matched</span></td>
                       <td><span className="text-button">View Journal</span></td>
                     </tr>
                     <tr>
                       <td><b>TXN-2026-090</b><br/><small>Zenith Bank Operating</small></td>
                       <td>Expense #88 · Cloud Hosting</td>
-                      <td><b>₦240,000</b></td>
+                      <td><b>₹2,40,000</b></td>
                       <td><span className="badge green">Matched</span></td>
                       <td><span className="text-button">View Journal</span></td>
                     </tr>
                     <tr>
                       <td><b>TXN-2026-091</b><br/><small>Access Bank Feed</small></td>
                       <td>Invoice #1049 · BUA Foods</td>
-                      <td><b>₦1,250,000</b></td>
+                      <td><b>₹12,50,000</b></td>
                       <td><span className="badge amber">Suggested</span></td>
                       <td><span className="text-button" style={{ fontWeight: 700 }}>Confirm Match</span></td>
                     </tr>
@@ -288,21 +288,21 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
                       <td><b>Industrial Cable 50m</b><br/><small>SKU: CBL-IND-50M</small></td>
                       <td>Ikeja Central (Bay 4A)</td>
                       <td><b>142 units</b></td>
-                      <td>₦18,500</td>
+                      <td>₹18,500</td>
                       <td><span className="badge green">In Stock</span></td>
                     </tr>
                     <tr>
                       <td><b>Copper Busbar 100A</b><br/><small>SKU: BB-COP-100</small></td>
                       <td>Lekki Depot (Bay 1C)</td>
                       <td><b style={{ color: '#ef4444' }}>8 units</b> (Min: 25)</td>
-                      <td>₦32,000</td>
+                      <td>₹32,000</td>
                       <td><span className="badge red">Reorder Alert</span></td>
                     </tr>
                     <tr>
                       <td><b>Modular Circuit Breaker</b><br/><small>SKU: CB-MOD-63A</small></td>
                       <td>Ikeja Central (Bay 2B)</td>
                       <td><b>380 units</b></td>
-                      <td>₦9,400</td>
+                      <td>₹9,400</td>
                       <td><span className="badge green">Healthy</span></td>
                     </tr>
                   </tbody>
@@ -326,8 +326,8 @@ function DashboardPreview({ onLaunch }: { onLaunch: () => void }) {
                 </p>
                 <div style={{ marginTop: '0.75rem', padding: '0.85rem', borderRadius: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}>
                   <p style={{ margin: 0, fontWeight: 500, color: 'var(--text-primary)' }}>
-                    Current operational runway is <b>7.8 months</b> at a monthly burn rate of <b>₦1,900,000</b> (₦4.65M gross payroll + ₦3.8M OpEx − ₦6.55M baseline collections).
-                    One SKU (<b>Copper Busbar 100A</b>, 8 on hand vs min 25) has breached minimum threshold; recommend raising PO-2026-041 for 30 units (capital required: ₦960,000).
+                    Current operational runway is <b>7.8 months</b> at a monthly burn rate of <b>₹19,00,000</b> (₹4.65M gross payroll + ₹3.8M OpEx − ₹6.55M baseline collections).
+                    One SKU (<b>Copper Busbar 100A</b>, 8 on hand vs min 25) has breached minimum threshold; recommend raising PO-2026-041 for 30 units (capital required: ₹9,60,000).
                   </p>
                   <small style={{ marginTop: '0.5rem', display: 'block', color: 'var(--text-muted)' }}>
                     Data Lineage: General Ledger 1010, Payroll register 2026-03, and Product SKU master table.
@@ -352,7 +352,7 @@ export function Marketing({
   const [page, setPage] = useState<Page>(() => pageFor(initialPath))
   const [menuOpen, setMenuOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
-  const { theme, toggleTheme, isDark } = useTheme()
+  const { toggleTheme, isDark } = useTheme()
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)

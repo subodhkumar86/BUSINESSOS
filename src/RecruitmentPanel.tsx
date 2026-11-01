@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { request } from './api'
+import { demoCandidates } from './demo-data'
 import type { Snapshot } from './types'
 
 interface Candidate {
@@ -18,7 +19,7 @@ const nextStage: Record<string, string> = {
   offer: 'hired',
 }
 export function RecruitmentPanel({ remote }: { remote: Snapshot | null }) {
-  const [candidates, setCandidates] = useState<Candidate[]>([])
+  const [candidates, setCandidates] = useState<Candidate[]>(() => remote ? [] : demoCandidates)
   const [loading, setLoading] = useState(Boolean(remote))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')

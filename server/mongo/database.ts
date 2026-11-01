@@ -28,6 +28,7 @@ export interface PlanDocument {
   _id: string
   features: string[]
   seatLimit: number
+  price?: string
 }
 export interface EventDocument {
   _id: string
@@ -42,6 +43,7 @@ export interface RequestDocument {
   tenant: string
   key: string
   fingerprint: string
+  response?: unknown
 }
 export interface RecordDocument {
   _id: string
@@ -98,7 +100,57 @@ export async function initializeDatabase() {
     .collection('rate_limits')
     .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
   await d.records.createIndex({ tenant: 1, kind: 1, updated_at: -1 })
+  await d.records.createIndex(
+    { kind: 1, 'data.enabled': 1, 'data.next_run_at': 1 },
+    { name: 'due_automation_schedules' },
+  )
+  await d.records.createIndex({ kind: 1, 'data.token_digest': 1 })
+  await d.records.createIndex({
+    kind: 1,
+    'data.status': 1,
+    'data.next_attempt_at': 1,
+  })
+  await d.records.createIndex(
+    { tenant: 1, 'data.user_id': 1 },
+    {
+      unique: true,
+      partialFilterExpression: { kind: 'security:mfa' },
+      name: 'one_mfa_per_user',
+    },
+  )
+  await d.records.createIndex(
+    { tenant: 1, 'data.product_id': 1, 'data.location_id': 1 },
+    {
+      unique: true,
+      partialFilterExpression: { kind: 'warehouse:balance' },
+      name: 'one_product_location_balance',
+    },
+  )
+  await d.records.createIndex(
+    { tenant: 1, 'data.reference': 1 },
+    {
+      unique: true,
+      partialFilterExpression: { kind: 'upi:receipt' },
+      name: 'unique_upi_receipt_reference',
+    },
+  )
   await d.requests.createIndex({ tenant: 1, key: 1 }, { unique: true })
+  await d.records.createIndex(
+    { tenant: 1, 'data.product_id': 1 },
+    {
+      unique: true,
+      partialFilterExpression: { kind: 'automation:stock_task' },
+      name: 'one_stock_review_link_per_product',
+    },
+  )
+  await d.records.createIndex(
+    { tenant: 1 },
+    {
+      unique: true,
+      partialFilterExpression: { kind: 'automation:stock_settings' },
+      name: 'one_stock_automation_setting',
+    },
+  )
   for (const collection of [d.audit, d.journals, d.stock])
     await collection.createIndex({ tenant: 1 })
   for (const plan of [

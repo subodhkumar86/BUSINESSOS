@@ -197,12 +197,15 @@ export async function handleOperations({
       fail(403, 'Your plan does not include HR workflows.')
     const collectionKind = 'workflow:' + kind
     const currentState = (await readWorkspace(tenant)).state
-    // Employee-to-user mapping needs an explicit link; matching names is unsafe.
     if (account.role === 'employee' && ['leave', 'goals'].includes(kind))
-      fail(
-        403,
-        'Ask HR to manage this workflow until employee account linking is configured.',
+      if (
+        !account.employeeId ||
+        !currentState.employees.some((e) => e.id === account.employeeId)
       )
+        fail(
+          403,
+          'Ask your workspace owner to link your account to an employee record in Team access.',
+        )
     const expose = (row: RecordDocument) => ({
       id: row._id,
       kind,
@@ -217,7 +220,19 @@ export async function handleOperations({
       return json({
         records: (
           await d.records
-            .find({ tenant, kind: collectionKind, ...(id ? { _id: id } : {}) })
+            .find({
+              tenant,
+              kind: collectionKind,
+              ...(id ? { _id: id } : {}),
+              ...(kind === 'knowledge' &&
+              !['owner', 'sales_crm_user', 'auditor'].includes(account.role)
+                ? { 'data.status': 'published' }
+                : {}),
+              ...(account.role === 'employee' &&
+              ['leave', 'goals'].includes(kind)
+                ? { 'data.values.employeeId': account.employeeId }
+                : {}),
+            })
             .sort({ created_at: -1 })
             .limit(500)
             .toArray()
@@ -236,6 +251,7 @@ export async function handleOperations({
     const fingerprint = digest(JSON.stringify({ kind, raw, actor: account.id }))
     const row = await transaction(async (session) => {
       await checkCurrent(session)
+      const currentState = (await readWorkspace(tenant, session)).state
       if (!id) {
         const old = await d.records.findOne(
           { tenant, kind: collectionKind, 'data.requestKey': key },
@@ -250,6 +266,14 @@ export async function handleOperations({
           string,
           unknown
         >
+        if (
+          account.role === 'employee' &&
+          values.employeeId !== account.employeeId
+        )
+          fail(
+            403,
+            'You can only create workflows for your linked employee record.',
+          )
         if (
           ['leave', 'goals', 'reviews'].includes(kind) &&
           !currentState.employees.some((e) => e.id === values.employeeId)
@@ -333,12 +357,23 @@ export async function handleOperations({
           { session },
         )
       if (!old) fail(404, 'Record not found.')
+      if (account.role === 'employee') {
+        if (
+          (old.data.values as Record<string, unknown>).employeeId !==
+          account.employeeId
+        )
+          fail(404, 'Record not found.')
+        if (kind === 'leave')
+          fail(403, 'Leave decisions require HR or the workspace owner.')
+      }
       if (old.version !== b.version)
         fail(409, 'Record changed. Refresh and try again.')
       if (
         kind === 'leave' &&
         b.status === 'approved' &&
-        old.data.created_by === account.id
+        (old.data.created_by === account.id ||
+          (old.data.values as Record<string, unknown>).employeeId ===
+            account.employeeId)
       )
         fail(403, 'Another HR user or owner must approve this leave.')
       if (

@@ -1,0 +1,47 @@
+# Module and section coverage
+
+This is the implementation map for the existing BusinessOS application. It does
+not certify provider integrations or deployment readiness. The active backend is
+`server/mongo`; the older SQL source is inactive.
+
+| Workspace               | Connected sections                                                                                                                                                     | Boundary                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Overview                | Current metrics, alerts, module navigation                                                                                                                             | Uses recorded workspace data                                                            |
+| Finance & AR/AP         | Invoices, collections, expenses, statements, exports, UPI payee/intents/receipts                                                                                       | UPI receipts require manual bank review                                                 |
+| Banking & Feeds         | Accounts, statement entry/CSV import, duplicate detection, matching, reconciliation                                                                                    | Live bank feeds need a provider adapter                                                 |
+| Inventory & Stock       | Products, thresholds, adjustments, counts, movements, fulfillment                                                                                                      | Warehouse allocations constrain available stock                                         |
+| Sales & CRM             | Leads, stages, scoring, customers, interactions, marketing consent/campaigns                                                                                           | Sending requires the configured delivery worker                                         |
+| Purchasing & POs        | Creation, approval requests, receipt and stock/accounting postings                                                                                                     | Receiving is separate from shipment tracking                                            |
+| Suppliers & Vendors     | Supplier register and lifecycle                                                                                                                                        | External supplier portals are outside current scope                                     |
+| Warehouse Management    | Locations, transfers, shipments, picking/packing/dispatch, returns, inspection/restocking                                                                              | Refunds and carrier sync require separate integrations                                  |
+| Projects & Tasks        | Projects, lifecycle, tasks, task completion, linked low-stock reviews                                                                                                  | No arbitrary free-text automation execution                                             |
+| HR & Payroll            | Employees, personal relief, recruitment/onboarding, payroll accrual, payslips, pending payment batches, leave, goals, reviews                                          | Payroll bank dispatch and non-Nigerian payroll rules are not implemented                |
+| Assets & Depreciation   | Asset register, location/status edits, calculated book values                                                                                                          | No automatic depreciation journals                                                      |
+| Facility Management     | Maintenance work orders and ordered lifecycle                                                                                                                          | No external maintenance-provider integration                                            |
+| Production & Quality    | Batches, product/material selectors, output/defect evidence, ordered lifecycle, atomic stock and accounting                                                            | Tracking-only batches do not post inventory                                             |
+| Front Office & Visitors | Visitors, check-in/out, appointments, room conflicts, reminder queues                                                                                                  | Worker/provider needed for reminder delivery                                            |
+| Customer Support        | Tickets, resolution, feedback, CSAT/NPS, knowledge publishing                                                                                                          | No external customer-authenticated portal                                               |
+| Documents & Media       | Uploads, revisions, downloads, comments, expiring revision shares, archive/revocation                                                                                  | Categories are labels rather than separate access policies                              |
+| Workflows & Automation  | Low-stock tasks, manual/hourly/daily schedules, run history, review notes                                                                                              | Scheduler must invoke the protected worker                                              |
+| Virtual Workspace       | Persistent chat, announcements and read receipts                                                                                                                       | No video or voice conferencing                                                          |
+| Tax Management          | Tenant settings, calculations and filing lifecycle evidence                                                                                                            | No statutory submission or automatic remittance                                         |
+| Supply Chain            | Approved-PO inbound shipments and ordered transit milestones                                                                                                           | Carrier sync and automatic ETAs need adapters                                           |
+| Compliance & Risk       | Risk register, mitigation, certifications, audit findings and evidence-based closure                                                                                   | Compliance records do not imply certification                                           |
+| Billing & Plans         | Plan/seat visibility and reviewed plan-change requests                                                                                                                 | No automatic subscription charge                                                        |
+| Approvals & Branches    | Branch directory, chain creation/editing/pause/thresholds, eligible decisions/comments/history, scenario history, delivery outbox, search, saved backup downloads, MFA | Branch labels do not enforce branch-level data access; scenarios are constant baselines |
+| Budget Management       | Dated budgets, closure, spend, controlled expense posting, overspend checks                                                                                            | No external payment execution                                                           |
+| Quotations & RFQ        | Requests, quote amount, acceptance/rejection lifecycle                                                                                                                 | Acceptance does not automatically create a PO                                           |
+| BI & AI Intelligence    | Permission-scoped answers, source evidence, financial scenarios                                                                                                        | No trained predictive model                                                             |
+| Platform Admin          | Tenant directory, plans, assignments, aggregate health/integrations                                                                                                    | Provisioned platform administrator required; tenant finance remains excluded            |
+| Settings & Security     | Organisation, actual currency/storage labels, team/roles/employee links, password/session controls, MFA, versioned connector editing, audit log, exports               | Connector metadata alone does not activate provider adapters                            |
+
+The unit and database suites exercise validation, role/tenant isolation,
+transactions, stale writes and retry behavior. The signed-in browser test visits
+the tenant modules and exercises connected workflows; the demo suite additionally
+checks every owner module and mobile layout. These checks are not exhaustive
+acceptance tests for every combination of role, plan and deployment provider.
+
+See [RELEASE_READINESS.md](RELEASE_READINESS.md) for executed release checks and
+configuration blockers, [WORKFLOW_CONTRACTS.md](WORKFLOW_CONTRACTS.md) for lifecycle
+contracts, and [MIGRATION_STATUS.md](MIGRATION_STATUS.md) for remaining integration
+and scaling boundaries.

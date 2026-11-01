@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { request } from './api'
+import { demoWorkflows } from './demo-data'
 import {
   workflowStates,
   workflowWriters,
@@ -36,7 +37,7 @@ const config: Record<WorkflowKind, { title: string; fields: Field[] }> = {
       ['periodEnd', 'Review period ends', 'date'],
       ['rating', 'Rating (1–5)', 'rating'],
       ['summary', 'Evaluation summary', 'textarea'],
-      ['rewardAmount', 'Reward amount (NGN, optional)', 'number'],
+      ['rewardAmount', 'Reward amount (INR, optional)', 'number'],
       ['rewardNote', 'Reward note', 'text'],
     ],
   },
@@ -106,7 +107,7 @@ export function WorkflowPanel({
   state: State
 }) {
   const spec = config[kind]
-  const [records, setRecords] = useState<WorkflowRecord[]>([]),
+  const [records, setRecords] = useState<WorkflowRecord[]>(() => remote ? [] : demoWorkflows(kind)),
     [loading, setLoading] = useState(Boolean(remote)),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
@@ -260,7 +261,7 @@ export function WorkflowPanel({
         'Employee record unavailable'
       )
     if (name === 'startAt' || name === 'endAt')
-      return new Date(String(value)).toLocaleString()
+      return new Date(String(value)).toLocaleString('en-IN')
     return String(value)
   }
   return (
@@ -301,7 +302,7 @@ export function WorkflowPanel({
         >
           {spec.fields.map(([name, label, type]) => (
             <label key={name}>
-              {label}
+              {label.replace('INR', state.currency)}
               {type === 'employee' ? (
                 <select name={name} required defaultValue="">
                   <option value="" disabled>
@@ -409,7 +410,7 @@ export function WorkflowPanel({
               {kind === 'reviews' && Number(row.data.rewardAmount || 0) > 0 && (
                 <>
                   <dt>Reward</dt>
-                  <dd>NGN {Number(row.data.rewardAmount).toLocaleString()} {String(row.data.rewardNote || '')}</dd>
+                  <dd>{state.currency} {Number(row.data.rewardAmount).toLocaleString('en-IN')} {String(row.data.rewardNote || '')}</dd>
                 </>
               )}
               {Boolean(row.data.evidence) && (
@@ -473,14 +474,14 @@ export function WorkflowPanel({
                     </button>
                   </label>
                 )}
-                {(workflowStates[kind][row.status] || []).map((status) => (
+                {(kind === 'leave' && remote?.user.role === 'employee' ? [] : workflowStates[kind][row.status] || []).map((status) => (
                   <button
                     key={status}
                     disabled={
                       busy ||
                       (kind === 'leave' &&
                         status === 'approved' &&
-                        row.created_by === remote?.user.id)
+                        (row.created_by === remote?.user.id || row.data.employeeId === remote?.user.employeeId))
                     }
                     onClick={() => void update(row, status)}
                   >

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { request } from './api'
-import { userRoles, type User, type UserRole } from './types'
+import { userRoles, type User, type UserRole, type Employee } from './types'
 import { RoleMatrix } from './RoleMatrix'
 type Member = User & { active: boolean }
 const roleLabel = (role: UserRole) => role === 'owner' ? 'Tenant Super Admin' : role.replaceAll('_', ' ')
-export function Team({ csrf }: { csrf: string }) {
+export function Team({ csrf, employees = [] }: { csrf: string; employees?: Employee[] }) {
   const [members, setMembers] = useState<Member[]>([]),
     [message, setMessage] = useState(''),
     [error, setError] = useState(''),
@@ -84,6 +84,7 @@ export function Team({ csrf }: { csrf: string }) {
                 <th>Email</th>
                 <th>Role</th>
                 <th>Access</th>
+                <th>Employee record</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -94,6 +95,15 @@ export function Team({ csrf }: { csrf: string }) {
                   <td>{member.email}</td>
                   <td><span className="role-badge">{roleLabel(member.role)}</span></td>
                   <td><span className={`badge ${member.active ? 'green' : 'red'}`}>{member.active ? 'Active' : 'Disabled'}</span></td>
+                  <td><select aria-label={`Employee record for ${member.name}`} value={member.employeeId || ''} disabled={busy || member.role === 'owner'} onChange={async event => {
+                    const employeeId = event.target.value || null
+                    setBusy(true); setError(''); setMessage('')
+                    try {
+                      await request('/users/' + member.id + '/employee', { method: 'PATCH', headers: { 'X-CSRF-Token': csrf }, body: JSON.stringify({ employeeId }) })
+                      await refresh(); setMessage('Employee link updated. The user must sign in again.')
+                    } catch (error) { setError(error instanceof Error ? error.message : 'Could not update employee link.') }
+                    finally { setBusy(false) }
+                  }}><option value="">Not linked</option>{employees.map(employee => <option key={employee.id} value={employee.id}>{employee.name} — {employee.department}</option>)}</select></td>
                   <td className="table-actions">
                     {member.role !== 'owner' ? (
                       <button

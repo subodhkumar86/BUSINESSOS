@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next'
 import type { ReactNode } from 'react'
 import '../src/index.css'
+import '../src/refresh.css'
+import WorkspaceClient from './workspace-client'
 
 // oxlint-disable-next-line react/only-export-components -- Next.js metadata export.
 export const metadata: Metadata = {
@@ -27,7 +29,10 @@ export default function Layout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body>
-        <div id="root">{children}</div>
+        <div id="root">
+          <WorkspaceClient />
+          {children}
+        </div>
       </body>
     </html>
   )

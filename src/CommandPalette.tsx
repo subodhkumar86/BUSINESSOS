@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavIcon } from './NavIcon'
-import type { UserRole, CreateCollection } from './types'
+import { canPerformAction, type UserRole, type CreateCollection, type State } from './types'
+import { globalSearch } from '../server/search'
 
 export interface CommandItem {
   id: string
   title: string
-  category: 'Workspaces' | 'Quick Actions' | 'System'
+  category: 'Workspaces' | 'Quick Actions' | 'Records' | 'System'
   subtitle?: string
   icon?: string
   keywords?: string[]
@@ -23,6 +24,8 @@ interface CommandPaletteProps {
   canViewPage: (id: string, role: UserRole) => boolean
   pages: [string, string, string, string][]
   onAskAi: () => void
+  state: State
+  onRecordSelect: (page: string, name: string) => void
   onExportCsv: () => void
 }
 
@@ -38,6 +41,8 @@ export function CommandPalette({
   pages,
   onAskAi,
   onExportCsv,
+  state,
+  onRecordSelect,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -46,9 +51,13 @@ export function CommandPalette({
 
   useEffect(() => {
     if (isOpen) {
-      setQuery('')
-      setSelectedIndex(0)
-      setTimeout(() => inputRef.current?.focus(), 50)
+      const previous = document.activeElement as HTMLElement | null
+      const timer = setTimeout(() => {
+        setQuery('')
+        setSelectedIndex(0)
+        inputRef.current?.focus()
+      }, 0)
+      return () => { clearTimeout(timer); if (document.activeElement === document.body) previous?.focus() }
     }
   }, [isOpen])
 
@@ -186,16 +195,38 @@ export function CommandPalette({
     },
   })
 
+  const createCommands: Record<string, CreateCollection> = {
+    'action-invoice': 'invoices', 'action-expense': 'expenses',
+    'action-lead': 'leads', 'action-product': 'products',
+    'action-order': 'orders', 'action-employee': 'employees',
+  }
+  const permittedCommands = allCommands.filter(command => {
+    const collection = createCommands[command.id]
+    if (collection) return canPerformAction(effectiveRole, { type: 'create', collection })
+    if (command.id === 'action-ai') return canViewPage('ai', effectiveRole)
+    if (command.id === 'action-export') return canViewPage('finance', effectiveRole)
+    return true
+  })
+  const destinations: Record<string, string> = { product: 'inventory', invoice: 'finance', lead: 'crm', employee: 'hr', project: 'projects', task: 'projects' }
+  for (const record of globalSearch(state, query)) {
+    const page = destinations[record.kind]
+    if (!canViewPage(page, effectiveRole)) continue
+    permittedCommands.push({ id: 'record-' + record.kind + '-' + record.id,
+      title: record.name, subtitle: record.kind + ' / ' + record.id,
+      category: 'Records', icon: page, onSelect: () => { onClose(); onRecordSelect(page, record.name) } })
+  }
+  const categories = ['Quick Actions', 'Records', 'Workspaces', 'System'] as const
+  permittedCommands.sort((a, b) => categories.indexOf(a.category) - categories.indexOf(b.category))
   // Filter items
   const cleanQ = query.trim().toLowerCase()
   const filteredCommands = cleanQ
-    ? allCommands.filter((cmd) => {
+    ? permittedCommands.filter((cmd) => {
         if (cmd.title.toLowerCase().includes(cleanQ)) return true
         if (cmd.subtitle?.toLowerCase().includes(cleanQ)) return true
         if (cmd.keywords?.some((k) => k.includes(cleanQ))) return true
         return false
       })
-    : allCommands
+    : permittedCommands
 
   // Keyboard navigation
   useEffect(() => {
@@ -210,8 +241,8 @@ export function CommandPalette({
         setSelectedIndex((prev) => (prev < filteredCommands.length - 1 ? prev + 1 : 0))
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setSelectedIndex((prev) => (prev > 0 ? prev - 1 : filteredCommands.length - 1))
-      } else if (e.key === 'Enter') {
+        setSelectedIndex((prev) => (prev > 0 ? prev - 1 : Math.max(0, filteredCommands.length - 1)))
+      } else if (e.key === 'Enter' && document.activeElement === inputRef.current) {
         e.preventDefault()
         if (filteredCommands[selectedIndex]) {
           filteredCommands[selectedIndex].onSelect()
@@ -235,10 +266,15 @@ export function CommandPalette({
   if (!isOpen) return null
 
   // Group commands by category
-  const categories = ['Quick Actions', 'Workspaces', 'System'] as const
 
   return (
-    <div className="cmd-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Command palette">
+    <div className="cmd-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={(event) => {
+      if (event.key !== 'Tab') return
+      const targets = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input,button'))
+      const first = targets[0], last = targets.at(-1)
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }}>
       <div className="cmd-modal" onClick={(e) => e.stopPropagation()}>
         <div className="cmd-search-wrap">
           <svg className="cmd-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -248,6 +284,12 @@ export function CommandPalette({
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-label="Search commands and records"
+            aria-expanded="true"
+            aria-controls="command-results"
+            aria-autocomplete="list"
+            aria-activedescendant={filteredCommands[selectedIndex] ? `command-${filteredCommands[selectedIndex].id}` : undefined}
             className="cmd-input"
             placeholder="Type a command, search modules, or jump to..."
             value={query}
@@ -256,10 +298,10 @@ export function CommandPalette({
               setSelectedIndex(0)
             }}
           />
-          <kbd className="cmd-kbd-esc" onClick={onClose}>ESC</kbd>
+          <button type="button" className="cmd-kbd-esc" aria-label="Close command palette" onClick={onClose}>ESC</button>
         </div>
 
-        <div className="cmd-list" ref={listRef}>
+        <div className="cmd-list" ref={listRef} role="listbox" id="command-results" aria-label="Search results">
           {filteredCommands.length === 0 ? (
             <div className="cmd-empty">
               <svg className="cmd-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -284,6 +326,9 @@ export function CommandPalette({
                     return (
                       <div
                         key={cmd.id}
+                        id={`command-${cmd.id}`}
+                        role="option"
+                        aria-selected={isSelected}
                         data-selected={isSelected}
                         className={`cmd-item ${isSelected ? 'is-selected' : ''}`}
                         onClick={cmd.onSelect}
@@ -318,7 +363,7 @@ export function CommandPalette({
             <span><kbd>ESC</kbd> Close</span>
           </div>
           <div className="cmd-footer-brand">
-            <span>BusinessOS FastNav</span>
+            <span>{filteredCommands.length} results / BusinessOS</span>
           </div>
         </div>
       </div>

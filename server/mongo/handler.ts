@@ -46,6 +46,30 @@ import {
 } from '../../server/modules'
 import { userRoles, type Action } from '../../src/types'
 import { handleOperations } from './operations'
+import { handleWarehouse } from './warehouse'
+import { handleBusiness } from './business'
+import { handleSupport } from './support'
+import { handleDocuments, sharedDocument } from './documents'
+import { handleReports } from './reports'
+import { handleOperational } from './operational'
+import { handleTaxSettings } from './tax-settings'
+import { handleBanking } from './banking'
+import { handleAutomation } from './automation'
+import { handleAutomationWorker } from './automation-worker'
+import { handleUpi } from './upi'
+import { handleApprovals, queueApproval } from './approvals'
+import { handleControls } from './controls'
+import { handleOnboarding } from './onboarding'
+import { handleSupply } from './supply'
+import {
+  checkLoginMfa,
+  handleAccountSecurity,
+  publicAccountSecurity,
+} from './account-security'
+import { handleOutboxWorker } from './outbox'
+import { handleAdmin } from './admin'
+import { scoreLead } from '../lead-scoring'
+import { reportingPeriod } from '../../src/reporting'
 
 const text = z.string().trim().min(1).max(200)
 const email = z
@@ -71,7 +95,7 @@ const actionInput = z
   })
   .strict()
 
-async function body(request: Request): Promise<unknown> {
+async function body(request: Request, maximum = 32768): Promise<unknown> {
   if (!request.headers.get('content-type')?.startsWith('application/json'))
     fail(415, 'Send JSON data.')
   const reader = request.body?.getReader()
@@ -82,7 +106,7 @@ async function body(request: Request): Promise<unknown> {
     const result = await reader.read()
     if (result.done) break
     size += result.value.byteLength
-    if (size > 32768) {
+    if (size > maximum) {
       await reader.cancel()
       fail(413, 'Request is too large.')
     }
@@ -109,14 +133,22 @@ async function dispatch(request: Request): Promise<Response> {
     return new Response(null, {
       status: 204,
       headers: {
-        'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+        'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
         'Access-Control-Allow-Headers':
           'Content-Type,X-CSRF-Token,Idempotency-Key',
         'Access-Control-Max-Age': '600',
       },
     })
   }
+  const worker = await handleOutboxWorker(request, path)
+  if (worker) return worker
+  const automationWorker = await handleAutomationWorker(request, path)
+  if (automationWorker) return automationWorker
   const d = await database()
+  const recovery = await publicAccountSecurity(request, path, () =>
+    body(request),
+  )
+  if (recovery) return recovery
   if (path === '/health' && method === 'GET') {
     await d.db.command({ ping: 1 })
     const schema = await d.db
@@ -152,12 +184,14 @@ async function dispatch(request: Request): Promise<Response> {
           email,
           password: passwordSchema,
           sample: z.boolean().default(false),
+          currency: z.enum(['NGN', 'INR']).default('INR'),
         })
         .strict()
         .parse(input)
       const tenant = randomUUID(),
         id = randomUUID(),
         state = initialState(b.organisation, b.sample)
+      state.currency = b.currency
       account = {
         _id: id,
         id,
@@ -203,7 +237,13 @@ async function dispatch(request: Request): Promise<Response> {
       })
     } else {
       const b = z
-        .object({ email, password: z.string().min(1).max(128) })
+        .object({
+          email,
+          password: z.string().min(1).max(128),
+          code: z
+            .union([z.literal(''), z.string().regex(/^\d{6}$/)])
+            .optional(),
+        })
         .strict()
         .parse(input)
       const found = await d.users.findOne({ email: b.email })
@@ -215,6 +255,7 @@ async function dispatch(request: Request): Promise<Response> {
       if (!found || !valid || !found.active)
         fail(401, 'Email or password is incorrect.')
       account = found
+      await checkLoginMfa(account, b.code)
     }
     const issued = await issueSession(account)
     return json(
@@ -223,6 +264,8 @@ async function dispatch(request: Request): Promise<Response> {
       { 'Set-Cookie': cookie(issued.token) },
     )
   }
+  const shared = await sharedDocument(path, method)
+  if (shared) return shared
   const { account, session: auth } = await authenticate(request),
     tenant = account.tenant
   const doc = await d.tenants.findOne({ _id: tenant })
@@ -245,6 +288,15 @@ async function dispatch(request: Request): Promise<Response> {
       ))
     )
       fail(401, 'Session expired. Sign in again.')
+    const latestTenant = await d.tenants.findOne({ _id: tenant }, { session })
+    if (!latestTenant) fail(404, 'Workspace not found.')
+    const latestPlan = await d.plans.findOne(
+      { _id: latestTenant.plan },
+      { session },
+    )
+    if (!latestPlan) fail(503, 'Database setup is pending.')
+    if (feature && !latestPlan.features.includes(feature))
+      fail(403, 'Your current subscription does not include this workflow.')
     // Contend on the tenant document with security changes and workflow writes.
     await d.tenants.updateOne(
       { _id: tenant },
@@ -309,12 +361,15 @@ async function dispatch(request: Request): Promise<Response> {
       fail(403, 'Your subscription does not include this workflow.')
     const key = z.uuid().parse(request.headers.get('idempotency-key')),
       fingerprint = digest(JSON.stringify(action))
+    let approvalChain: string | undefined
     await transaction(async (session) => {
       const current = await readWorkspace(tenant, session)
       const old = await d.requests.findOne({ tenant, key }, { session })
       if (old) {
         if (old.fingerprint !== fingerprint)
           fail(409, 'Request key already used for a different action.')
+        approvalChain =
+          typeof old.response === 'string' ? old.response : undefined
         return
       }
       if (current.version !== b.version)
@@ -332,6 +387,34 @@ async function dispatch(request: Request): Promise<Response> {
       )
         fail(401, 'Session expired.')
       let next
+      await checkCurrent(session)
+      approvalChain = await queueApproval(account, action, session)
+      if (needed) {
+        const latest = await d.plans.findOne({ _id: current.plan }, { session })
+        if (!latest?.features.includes(needed))
+          fail(403, 'Your current subscription does not include this action.')
+      }
+      if (approvalChain) {
+        await d.requests.insertOne(
+          {
+            _id: randomUUID(),
+            tenant,
+            key,
+            fingerprint,
+            response: approvalChain,
+          },
+          { session },
+        )
+        await appendEvent(
+          tenant,
+          account.email,
+          'approval_requested',
+          action.id || '',
+          approvalChain,
+          session,
+        )
+        return
+      }
       try {
         next = transition(current.state, {
           ...action,
@@ -345,19 +428,46 @@ async function dispatch(request: Request): Promise<Response> {
         )
       }
       if (next.audit[0]) next.audit[0].actor = account.email
+      const balances = await d.records
+        .find({ tenant, kind: 'warehouse:balance' }, { session })
+        .toArray()
+      for (const product of next.products) {
+        const allocated = balances
+          .filter((row) => row.data.product_id === product.id)
+          .reduce((total, row) => total + Number(row.data.quantity), 0)
+        if (product.qty < allocated)
+          fail(
+            409,
+            'Stock is allocated to warehouse locations. Dispatch from the location or transfer it before reducing unallocated stock.',
+          )
+      }
       await saveWorkspace(current, next, session)
       await d.requests.insertOne(
         { _id: randomUUID(), tenant, key, fingerprint },
         { session },
       )
     })
-    return json(await snapshot(account, auth))
+    return json({
+      ...(await snapshot(account, auth)),
+      ...(approvalChain
+        ? {
+            notice: `Approval requested through ${approvalChain}. Review pending steps in Approvals, branches and delivery.`,
+          }
+        : {}),
+    })
   }
   if (path === '/billing/entitlements' && method === 'GET')
     return json({
       plan: plan._id,
       features: plan.features,
       seatLimit: plan.seatLimit,
+      activeSeats: await d.users.countDocuments({ tenant, active: true }),
+      availablePlans: (await d.plans.find().toArray()).map((p) => ({
+        id: p._id,
+        price: p.price,
+        seatLimit: p.seatLimit,
+        features: p.features,
+      })),
     })
   if (path === '/audit-logs' && method === 'GET') {
     requireRole(account, ['owner', 'auditor'])
@@ -374,30 +484,30 @@ async function dispatch(request: Request): Promise<Response> {
       requireRole(account, ['owner', 'finance_admin', 'auditor'])
     const { state } = await readWorkspace(tenant),
       permitted = scopedState(state, account.role)
-    if (path === '/finance/statements')
+    if (path === '/finance/statements') {
+      const period = reportingPeriod.parse(Object.fromEntries(url.searchParams))
       return json({
-        income: generateIncomeStatement(state),
-        balance: generateBalanceSheet(state),
-        cashFlow: generateCashFlowStatement(state),
+        income: generateIncomeStatement(state, period),
+        balance: generateBalanceSheet(state, period),
+        cashFlow: generateCashFlowStatement(state, period),
       })
+    }
     return json(metrics(permitted))
   }
   if (path === '/crm/lead-scores' && method === 'GET') {
     requireRole(account, ['owner', 'sales_crm_user', 'auditor'])
     const { state } = await readWorkspace(tenant)
+    const average = state.leads.length
+      ? state.leads.reduce((sum, lead) => sum + lead.amount, 0) /
+        state.leads.length
+      : 0
     return json({
       scores: state.leads.map((lead) => ({
         id: lead.id,
-        score:
-          (
-            {
-              New: 20,
-              Qualified: 50,
-              Proposal: 75,
-              Won: 100,
-              Lost: 0,
-            } as Record<string, number>
-          )[lead.status] || 0,
+        leadId: lead.id,
+        name: lead.name,
+        status: lead.status,
+        ...scoreLead(lead, average),
       })),
     })
   }
@@ -466,6 +576,48 @@ async function dispatch(request: Request): Promise<Response> {
       ],
       enrichment: { status: 'disabled' },
     })
+  }
+  const employeeLink = path.match(/^\/users\/([^/]+)\/employee$/)
+  if (employeeLink) {
+    requireRole(account, ['owner'])
+    if (method !== 'PATCH') fail(405, 'Method not supported.')
+    const id = z.uuid().parse(employeeLink[1]),
+      input = z
+        .object({ employeeId: z.uuid().nullable() })
+        .strict()
+        .parse(await body(request))
+    await transaction(async (session) => {
+      await checkCurrent(session)
+      const target = await d.users.findOne({ _id: id, tenant }, { session })
+      if (!target) fail(404, 'User not found.')
+      if (input.employeeId) {
+        const state = (await readWorkspace(tenant, session)).state
+        if (!state.employees.some((e) => e.id === input.employeeId))
+          fail(404, 'Employee not found.')
+        if (
+          await d.users.findOne(
+            { tenant, employeeId: input.employeeId, _id: { $ne: id } },
+            { session },
+          )
+        )
+          fail(409, 'This employee is already linked to another account.')
+      }
+      await d.users.updateOne(
+        { _id: id, tenant },
+        { $set: { employeeId: input.employeeId }, $inc: { sessionVersion: 1 } },
+        { session },
+      )
+      await d.sessions.deleteMany({ tenant, userId: id }, { session })
+      await appendEvent(
+        tenant,
+        account.email,
+        'employee_account_linked',
+        id,
+        input.employeeId || 'unlinked',
+        session,
+      )
+    })
+    return json({ ok: true })
   }
   const team = path.match(/^\/(?:users|team)(?:\/([^/]+)(?:\/access)?)?$/)
   if (team) {
@@ -572,7 +724,10 @@ async function dispatch(request: Request): Promise<Response> {
       id = moduleRoute[2] ? z.uuid().parse(moduleRoute[2]) : undefined
     // Platform administration cannot be accessed through generic tenant records.
     if (kind === 'admin')
-      fail(501, 'Platform administration has not been ported to MongoDB.')
+      fail(
+        403,
+        'Use the platform administration API with a platform administrator account.',
+      )
     if (!canReadModule(account.role, kind))
       fail(403, 'Your role cannot view this module.')
     if (method === 'GET') {
@@ -658,22 +813,56 @@ async function dispatch(request: Request): Promise<Response> {
       id ? 200 : 201,
     )
   }
-  const operation = await handleOperations({
+  const context = {
     request,
     path,
     account,
-    input: () => body(request),
+    input: () =>
+      body(request, path.startsWith('/documents') ? 3 * 1024 * 1024 : 32768),
     checkCurrent,
     features: plan.features,
-  })
+  }
+  const warehouse = await handleWarehouse(context)
+  if (warehouse) return warehouse
+  const operation = await handleOperations(context)
   if (operation) return operation
-  // Do not acknowledge unported financial/provider workflows as successful.
+  const business = await handleBusiness(context)
+  if (business) return business
+  const support = await handleSupport(context)
+  if (support) return support
+  const documents = await handleDocuments(context)
+  if (documents) return documents
+  const report = await handleReports(context)
+  if (report) return report
+  const operational = await handleOperational(context)
+  if (operational) return operational
+  const tax = await handleTaxSettings(context)
+  if (tax) return tax
+  const banking = await handleBanking(context)
+  if (banking) return banking
+  const automation = await handleAutomation(context)
+  if (automation) return automation
+  const upi = await handleUpi(context)
+  if (upi) return upi
+  const approvals = await handleApprovals(context)
+  if (approvals) return approvals
+  const controls = await handleControls(context)
+  if (controls) return controls
+  const onboarding = await handleOnboarding(context)
+  if (onboarding) return onboarding
+  const supply = await handleSupply(context)
+  if (supply) return supply
+  const admin = await handleAdmin(context)
+  if (admin) return admin
+  const accountSecurity = await handleAccountSecurity(context)
+  if (accountSecurity) return accountSecurity
+  // Unknown routes must not acknowledge a financial/provider operation as successful.
   return json(
     {
-      error: 'This workflow is not yet available on the MongoDB backend.',
-      code: 'WORKFLOW_NOT_MIGRATED',
+      error: 'API route not found.',
+      code: 'ROUTE_NOT_FOUND',
     },
-    501,
+    404,
   )
 }
 

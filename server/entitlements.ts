@@ -1,12 +1,16 @@
 export function requiredFeature(path: string): string | undefined {
   if (/^\/api\/v1\/ai\/forecast$/.test(path)) return 'forecast'
-  if (/^\/api\/v1\/modules\/automation(?:\/|$)/.test(path)) return 'automation'
-  if (/^\/api\/v1\/finance\/(statements|export\.(csv|xlsx))$/.test(path)) return 'reports'
+  if (/^\/api\/v1\/(?:modules\/)?automation(?:\/|$)/.test(path))
+    return 'automation'
+  if (/^\/api\/v1\/finance\/(statements|export\.(csv|xlsx))$/.test(path))
+    return 'reports'
   if (
-    /^\/api\/v1\/(hr|payroll|warehouse|suppliers|assets|facilities|production)(?:\/|$)/.test(
+    /^\/api\/v1\/(hr|payroll|warehouse|suppliers|assets|facilities|production|rfq|supply)(?:\/|$)/.test(
       path,
     )
   )
+    return 'operations'
+  if (/^\/api\/v1\/workflows\/(leave|goals|reviews)(?:\/|$)/.test(path))
     return 'operations'
   if (
     /^\/api\/v1\/modules\/(warehouse|assets|facilities|production|supply)(?:\/|$)/.test(

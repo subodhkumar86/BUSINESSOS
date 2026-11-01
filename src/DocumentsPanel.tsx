@@ -133,7 +133,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
       return
     }
     if (file.size > 2 * 1024 * 1024) {
-      setError('Document uploads are limited to 2 MB in local storage.')
+      setError('Document uploads are limited to 2 MB.')
       return
     }
     const filename = file.name.trim()
@@ -168,6 +168,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
         headers: { 'X-CSRF-Token': remote.csrf },
         body: JSON.stringify({
           filename,
+          category,
           mimeType: file.type || 'application/octet-stream',
           sizeBytes,
           contentBase64: await asBase64(file),
@@ -223,7 +224,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
       setSharedLink({
         id: doc.id,
         url: `${window.location.origin}/share/doc/${doc.id}?token=${token}&exp=${expiresMs}`,
-        expires: new Date(expiresMs).toLocaleString(),
+        expires: new Date(expiresMs).toLocaleString('en-IN'),
       })
       setNotice(`Demo share link generated (valid for ${hours}h).`)
       return
@@ -243,7 +244,7 @@ export function DocumentsPanel({ remote }: { remote: Snapshot | null }) {
       setSharedLink({
         id: doc.id,
         url: `${apiOrigin}/api/v1/shared-documents/${result.token}`,
-        expires: new Date(result.expiresAt).toLocaleString(),
+        expires: new Date(result.expiresAt).toLocaleString('en-IN'),
       })
       setNotice(`Secure share link generated (valid for ${hours}h).`)
     } catch (err) {

@@ -11,7 +11,8 @@ jobs:
     timeout-minutes: 20
     env:
       NEXT_TELEMETRY_DISABLED: '1'
-      MONGOMS_DOWNLOAD_DIR: .cache/mongodb
+      MONGOMS_DOWNLOAD_DIR: .cache/mongodb-binaries
+      PLAYWRIGHT_BROWSERS_PATH: .cache/playwright
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,10 +21,19 @@ jobs:
           cache: npm
       - uses: actions/cache@v4
         with:
-          path: .cache/mongodb
+          path: .cache/mongodb-binaries
           key: mongodb-8.0.16-${{ runner.os }}
       - run: npm ci
+      - run: npx playwright install --with-deps chromium --only-shell
+      - run: npm run typecheck
       - run: npm run build
       - run: npm run lint
       - run: npm test
-      - run: npm run test:integration
+      - run: npm run test:live
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: test-results/
+          if-no-files-found: ignore

@@ -139,6 +139,7 @@ export interface User {
   name: string
   email: string
   role: UserRole
+  employeeId?: string | null
 }
 export const userRoles = [
   'owner',
@@ -333,6 +334,7 @@ export interface CommunicationRecord {
 }
 
 export interface Snapshot {
+  notice?: string
   entitlements?: import('./entitlements').Entitlements
   state: State
   version: number

@@ -231,7 +231,7 @@ async function seedOperationalData(
   )
   await client.query(
     `INSERT INTO bank_accounts(id,tenant_id,provider,external_ref,name,currency,status)
-     VALUES($1,$2,'manual','demo-operating-account','Operating account','NGN','active')
+     VALUES($1,$2,'manual','demo-operating-account','Operating account','INR','active')
      ON CONFLICT (tenant_id,provider,external_ref) DO NOTHING`,
     [randomUUID(), demo.tenant],
   )

@@ -1,0 +1,13 @@
+# UPI invoice payment links
+
+Create a workspace with **INR** selected. In Finance, the owner saves the business's bank-approved merchant UPI ID and payee name, then generates links for unpaid invoices. Finance staff can generate links; auditors can inspect them. Only the owner can change the payee. Share the copied link with the customer or open it on a phone with a compatible UPI app.
+
+Links carry the invoice amount, INR currency and invoice reference. They do not initiate a charge themselves. The app does not validate ownership or merchant approval of a UPI ID; confirm those with your acquiring bank. Acceptance depends on the bank and payment app. No UPI PIN, banking password or OTP is collected by BusinessOS.
+
+After verifying the actual full credit in the merchant bank account, use **Record verified UPI receipt** beside its generated link. Enter the bank reference/UTR and actual receipt time, then confirm the full credit was checked in the bank. Owners and finance administrators can record receipts; auditors can inspect the history. Receipt evidence, invoice collection, journal and audit commit together. A tenant cannot reuse a UPI reference, and retrying the same request does not collect twice. Partial payments and future receipt dates are rejected. The received time is evidence metadata; the accounting journal posts when the collection is recorded.
+
+These are explicitly **manually verified** receipts. BusinessOS does not contact the bank to authenticate a typed UTR or checkbox. Link generation and app returns never mark an invoice paid. Automatic settlement confirmation, gateway signatures and refunds require a separate acquiring-bank/payment-gateway integration; this implementation does not claim those capabilities. Links already shared remain external payment instructions even after an invoice is settled or payee details change, so check the bank for duplicate receipts. Generic invoice collections and bank reconciliation remain separate supported collection methods; they do not create UPI receipt evidence automatically.
+
+Existing NGN workspaces retain their currency and cannot generate INR payment links. Create an INR workspace for Indian transactions. Country-specific payroll/tax modules still require jurisdiction-specific validation; selecting INR does not implement Indian GST or payroll rules.
+
+The format follows the payment fields documented in [Google Pay India's payment request guide](https://developers.google.com/pay/india/api/web/create-payment-method) and [NPCI merchant ecosystem circular](https://www.npci.org.in/PDF/npci/upi/circular/2017/Circular18_BankCompliances_to_enbaleUPIMerchantecosystem_0.pdf).

@@ -45,7 +45,7 @@ export function Payslips({ state }: { state: State }) {
         <details key={slip.id} className="payslip-item">
           <summary>
             {slip.employeeName} · Net pay {state.currency}{' '}
-            {slip.netPay.toLocaleString()}
+            {slip.netPay.toLocaleString('en-IN')}
           </summary>
           <dl>
             {[
@@ -60,7 +60,7 @@ export function Payslips({ state }: { state: State }) {
               <div key={title}>
                 <dt>{title}</dt>
                 <dd>
-                  {typeof value === 'number' ? value.toLocaleString() : value}
+                  {typeof value === 'number' ? value.toLocaleString('en-IN') : value}
                 </dd>
               </div>
             ))}

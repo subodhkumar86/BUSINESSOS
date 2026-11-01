@@ -1,5 +1,6 @@
 ﻿import { useState } from 'react'
 import { request } from './api'
+import { MfaSettings } from './MfaSettings'
 export function Security({ csrf }: { csrf: string }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('')
@@ -102,6 +103,7 @@ export function Security({ csrf }: { csrf: string }) {
           Sign out all devices
         </button>
       </div>
+      <MfaSettings csrf={csrf} />
     </section>
   )
 }

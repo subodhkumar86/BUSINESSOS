@@ -2321,7 +2321,7 @@ export async function createApp(config: {
                       payroll_employer_rate,invoice_prefix,tax_inclusive,compliance_notes,updated_at
                  FROM tenant_statutory_settings WHERE tenant_id=$1`, [s.tenant])
             return { settings: result.rows[0] || {
-              country_code: 'NG', jurisdiction: 'Nigeria', currency: 'NGN', financial_year_start_month: 1,
+              country_code: 'NG', jurisdiction: 'Nigeria', currency: 'INR', financial_year_start_month: 1,
               vat_rate: 0.075, withholding_rate: 0.05, income_tax_rate: 0.3,
               payroll_employee_rate: 0, payroll_employer_rate: 0, invoice_prefix: 'INV',
               tax_inclusive: false, compliance_notes: '', updated_at: null,
@@ -2667,7 +2667,7 @@ export async function createApp(config: {
               await store.append(c, s.tenant, journal, 'journals')
               await c.query('INSERT INTO asset_depreciation_postings(id,tenant_id,asset_id,period,amount,journal_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)', [randomUUID(), s.tenant, id, input.period, amount, journal.id, s.user.id])
               await c.query('UPDATE tenants SET state=$1,version=version+1 WHERE id=$2', [{ ...current.state, audit: [], journals: [], stockMovements: [] }, s.tenant])
-              await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'asset_depreciation_posted', entity: id, detail: input.period + ' NGN ' + amount })
+              await store.append(c, s.tenant, { id: randomUUID(), date: new Date().toISOString(), actor: s.user.email, action: 'asset_depreciation_posted', entity: id, detail: input.period + ' ' + current.state.currency + ' ' + amount })
               return { assetId: id, period: input.period, amount, journalId: journal.id }
             })
             return send(res, 201, row)

@@ -34,6 +34,7 @@ export function OnboardingWizard({
     }
   })
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (!remote || remote.user.role !== 'owner') return
@@ -67,6 +68,8 @@ export function OnboardingWizard({
           ? { ...previous, completedSteps: [...previous.completedSteps, stepId] }
           : previous,
       )
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not save onboarding progress.')
     } finally {
       setBusy(false)
     }
@@ -88,6 +91,8 @@ export function OnboardingWizard({
         body: JSON.stringify({ dismissed: true }),
       })
       setState((previous) => (previous ? { ...previous, dismissed: true } : previous))
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not dismiss onboarding.')
     } finally {
       setBusy(false)
     }
@@ -98,6 +103,7 @@ export function OnboardingWizard({
 
   return (
     <section className="card onboarding-card" aria-label="Workspace onboarding">
+      {error && <p role="alert" className="notice error">{error}</p>}
       <div className="section-top onboarding-header">
         <div>
           <p className="eyebrow">Workspace setup</p>

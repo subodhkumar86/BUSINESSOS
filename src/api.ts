@@ -1,20 +1,23 @@
 ﻿import type { Snapshot, Action } from './types'
 export class ApiError extends Error {
+  public status: number
   constructor(
-    public status: number,
+    status: number,
     message: string,
   ) {
     super(message)
+    this.status = status
   }
 }
 export async function request<T>(
   path: string,
-  options: RequestInit = {},
+  options: RequestInit & { sessionRequired?: boolean } = {},
 ): Promise<T> {
   let response: Response
+  const { sessionRequired = true, ...fetchOptions } = options
   try {
     response = await fetch('/api/v1' + path, {
-      ...options,
+      ...fetchOptions,
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', ...options.headers },
     })
@@ -24,21 +27,27 @@ export async function request<T>(
       'Cannot reach the API. Start the Next.js API and MongoDB.',
     )
   }
-  const data = await response
-    .json()
-    .catch(() => ({ error: 'API unavailable. Start the backend and refresh.' }))
+  const data: unknown = await response.json().catch(() => undefined)
+  const errorMessage =
+    data && typeof data === 'object' && 'error' in data &&
+    typeof data.error === 'string' && data.error.trim()
+      ? data.error
+      : 'The server returned an unexpected response. Please try again.'
   if (!response.ok) {
     if (
       response.status === 401 &&
+      sessionRequired &&
       !['/auth/login', '/auth/register'].includes(path)
     )
       window.dispatchEvent(
         new CustomEvent('businessos:session-ended', {
-          detail: data.error || 'Session expired. Sign in again.',
+          detail: errorMessage,
         }),
       )
-    throw new ApiError(response.status, data.error || 'Request failed.')
+    throw new ApiError(response.status, errorMessage)
   }
+  if (data === undefined)
+    throw new ApiError(502, 'The server returned an invalid response. Changes could not be confirmed; refresh before retrying.')
   return data as T
 }
 export function saveAction(snapshot: Snapshot, action: Action, key: string) {

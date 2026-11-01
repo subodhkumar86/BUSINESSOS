@@ -158,7 +158,7 @@ export function AdminConsole({
         <h3>{section === 'overview' ? 'Platform overview' : section === 'audit' ? 'Audit-ready platform status' : 'Security & service health'}</h3>
         {overview && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <p><strong>{overview.tenantsCount}</strong><br />tenants visible</p>
-          <p><strong>{overview.usersCount}</strong><br />users in administrator tenant</p>
+          <p><strong>{overview.usersCount}</strong><br />platform user accounts</p>
           <p><strong>{overview.status}</strong><br />service state</p>
           <p><strong>v{overview.version}</strong><br />application version</p>
         </div>}

@@ -87,7 +87,7 @@ export function SuppliersPanel({
     e.preventDefault()
     const form = e.currentTarget
     const values = Object.fromEntries(new FormData(form))
-    const leadDays = Number(values.leadDays) || 7
+    const leadDays = values.leadDays === '' ? 7 : Number(values.leadDays)
     setBusy(true)
     setError('')
     setNotice('')

@@ -1,3 +1,4 @@
+import { formatMoney } from './currency'
 import { useMemo, useState } from 'react'
 import type { Action, State } from './types'
 
@@ -16,7 +17,7 @@ export function FulfillmentPanel({ state, busy, readOnly, onCommit }: { state: S
         <label>Product<select required value={productId} onChange={event => setProductId(event.target.value)}><option value="">Select a product</option>{state.products.map(item => <option key={item.id} value={item.id}>{item.name} · {item.sku} ({item.qty} available)</option>)}</select></label>
         <label>Quantity dispatched<input required type="number" min="1" step="1" max="100000000" value={quantity} onChange={event => setQuantity(event.target.value)} /></label>
         <label>Customer order reference<input required minLength={3} maxLength={200} value={reference} placeholder="For example: SO-1042" onChange={event => setReference(event.target.value)} /></label>
-        <div className="stock-preview"><span>Available now <b>{product?.qty ?? '—'}</b></span><span>After dispatch <b>{product && quantity ? Math.max(0, product.qty - amount) : '—'}</b></span><span>COGS posting <b>{product && Number.isFinite(amount) ? new Intl.NumberFormat('en-NG', { style: 'currency', currency: state.currency, maximumFractionDigits: 2 }).format(amount * product.cost) : '—'}</b></span></div>
+        <div className="stock-preview"><span>Available now <b>{product?.qty ?? '—'}</b></span><span>After dispatch <b>{product && quantity ? Math.max(0, product.qty - amount) : '—'}</b></span><span>COGS posting <b>{product && Number.isFinite(amount) ? formatMoney(amount * product.cost, state.currency) : '—'}</b></span></div>
         <button className="primary" disabled={!valid}>{busy ? 'Saving...' : 'Dispatch and post COGS'}</button>
       </fieldset>
     </form>

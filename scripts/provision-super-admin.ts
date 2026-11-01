@@ -1,56 +1,105 @@
-import { randomBytes, randomUUID, scrypt } from 'node:crypto'
-import { promisify } from 'node:util'
-import { Pool } from 'pg'
+import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
+import {
+  database,
+  initializeDatabase,
+  transaction,
+} from '../server/mongo/database.ts'
+import { hashPassword } from '../server/mongo/security.ts'
+import { initialState, appendEvent } from '../server/mongo/workspace.ts'
+import { passwordSchema } from '../server/security.ts'
 
-const derive = promisify(scrypt)
-const email = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase()
-const password = process.env.SUPER_ADMIN_PASSWORD
-const name = process.env.SUPER_ADMIN_NAME?.trim() || 'Platform Super Admin'
-
-if (!process.env.DATABASE_URL) throw Error('DATABASE_URL is required.')
-if (!email || !/^\S+@\S+\.\S+$/.test(email))
-  throw Error('SUPER_ADMIN_EMAIL must be a valid email address.')
-if (!password || password.length < 12)
-  throw Error('SUPER_ADMIN_PASSWORD must be at least 12 characters.')
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 })
-const client = await pool.connect()
+const email = z
+  .email()
+  .parse(process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase())
+const password = passwordSchema.parse(process.env.SUPER_ADMIN_PASSWORD)
+const name = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .parse(process.env.SUPER_ADMIN_NAME || 'Platform Super Admin')
 try {
-  await client.query('BEGIN')
-  await client.query('SELECT pg_advisory_xact_lock(707018)')
-  const existing = await client.query<{
-    id: string
-    email: string
-  }>("SELECT id,email FROM users WHERE role='super_admin' FOR UPDATE")
-  if (existing.rowCount && existing.rows[0].email !== email)
-    throw Error(
-      'A platform Super Admin already exists. Update that account through trusted administration instead.',
-    )
-  const tenant = await client.query<{ id: string }>(
-    'SELECT id FROM tenants ORDER BY id LIMIT 1 FOR SHARE',
+  await initializeDatabase()
+  const encoded = await hashPassword(password),
+    d = await database()
+  await transaction(async (session) => {
+    await d.db
+      .collection<{ _id: string; revision: number }>('platform_locks')
+      .updateOne(
+        { _id: 'super_admin' },
+        { $inc: { revision: 1 } },
+        { upsert: true, session },
+      )
+    const existing = await d.users.findOne({ role: 'super_admin' }, { session })
+    if (existing && existing.email !== email)
+      throw Error('A different platform administrator already exists.')
+    if (existing) {
+      await d.users.updateOne(
+        { _id: existing._id },
+        {
+          $set: { name, password: encoded, active: true },
+          $inc: { sessionVersion: 1 },
+        },
+        { session },
+      )
+      await d.sessions.deleteMany(
+        { userId: existing.id, tenant: existing.tenant },
+        { session },
+      )
+      await appendEvent(
+        existing.tenant,
+        'Trusted provisioning',
+        'platform_admin_updated',
+        existing.id,
+        'Sessions revoked',
+        session,
+      )
+    } else {
+      const tenant = randomUUID(),
+        id = randomUUID()
+      if (await d.users.findOne({ email }, { session }))
+        throw Error(
+          'This email belongs to a business account. Use a dedicated administrator email.',
+        )
+      await d.tenants.insertOne(
+        {
+          _id: tenant,
+          state: initialState('BusinessOS Platform', false),
+          version: 0,
+          plan: 'enterprise',
+          createdAt: new Date(),
+        },
+        { session },
+      )
+      await d.users.insertOne(
+        {
+          _id: id,
+          id,
+          tenant,
+          name,
+          email,
+          password: encoded,
+          role: 'super_admin',
+          active: true,
+          sessionVersion: 0,
+        },
+        { session },
+      )
+      await appendEvent(
+        tenant,
+        'Trusted provisioning',
+        'platform_admin_created',
+        id,
+        'Dedicated platform workspace',
+        session,
+      )
+    }
+  })
+  console.log(
+    'Platform administrator provisioned. No credentials were printed.',
   )
-  if (!tenant.rowCount) throw Error('Create a tenant before provisioning the Super Admin.')
-  const salt = randomBytes(16).toString('hex')
-  const hash = (await derive(password, salt, 64)) as Buffer
-  const encoded = `${salt}:${hash.toString('hex')}`
-  if (existing.rowCount) {
-    await client.query(
-      "UPDATE users SET name=$1,password=$2,active=true,session_version=session_version+1 WHERE id=$3 AND role='super_admin'",
-      [name, encoded, existing.rows[0].id],
-    )
-    console.log(`Updated global Super Admin: ${email}`)
-  } else {
-    await client.query(
-      "INSERT INTO users(id,tenant_id,email,name,password,role) VALUES($1,$2,$3,$4,$5,'super_admin')",
-      [randomUUID(), tenant.rows[0].id, email, name, encoded],
-    )
-    console.log(`Provisioned global Super Admin: ${email}`)
-  }
-  await client.query('COMMIT')
-} catch (error) {
-  await client.query('ROLLBACK')
-  throw error
 } finally {
-  client.release()
-  await pool.end()
+  const d = await database()
+  await d.client.close()
 }

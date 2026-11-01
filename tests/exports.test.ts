@@ -2,6 +2,17 @@
 import assert from 'node:assert/strict'
 import { inflateRawSync } from 'node:zlib'
 import { financeWorkbook } from '../server/finance-workbook.ts'
+import { csvText } from '../src/csv.ts'
+
+test('CSV preserves Unicode, multiline quoted text and numeric amounts', () => {
+  assert.equal(csvText([['Customer', 'Amount (INR)'], ['भारत, "Trading"\nDelhi', 125000.75], [null, -250.5]]), '\ufeff"Customer","Amount (INR)"\r\n"भारत, ""Trading""\nDelhi",125000.75\r\n"",-250.5\r\n')
+})
+
+test('CSV neutralizes spreadsheet formulas without exposing nested metadata', () => {
+  const csv = csvText([['=1+1', '  +SUM(A1)', '\t@SUM(A1)', '-1+2', { hidden: 'secret' }, Number.NaN]])
+  assert.equal(csv, '\ufeff"\'=1+1","\'  +SUM(A1)","\'\t@SUM(A1)","\'-1+2","",\r\n')
+  assert.equal(csv.includes('secret'), false)
+})
 function unzip(buffer: Buffer) {
   const files: Record<string, string> = {}
   let offset = 0

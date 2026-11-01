@@ -10,10 +10,10 @@ import type {
   EmployeePayslip,
 } from './types'
 import { hydrateInventory, stockMovement, inventoryValue } from './inventory.ts'
-export const stages = ['New', 'Qualified', 'Proposal', 'Won', 'Lost']
+export const stages = ['New', 'Qualified', 'Proposal', 'Negotiation', 'Won', 'Lost']
 export const seed = (): State => hydrateInventory({
   organisation: 'Acme Trading Ltd',
-  currency: 'NGN',
+  currency: 'INR',
   products: [
     {
       id: 'p1',

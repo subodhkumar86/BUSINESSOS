@@ -2,9 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 import { MongoMemoryReplSet } from 'mongodb-memory-server'
 import { initializeDatabase, database } from '../server/mongo/database.ts'
 import { handleRequest } from '../server/mongo/handler.ts'
+import { verifyCompletedWorkflows } from './mongo-workflows.ts'
+import { verifyOperationalWorkflows } from './mongo-operational.ts'
+import { verifyLiveBrowser } from './mongo-browser.ts'
+import { verifyStockAutomation } from './mongo-automation.ts'
 
 const origin = 'http://127.0.0.1:3000'
 type Login = { cookie: string; csrf: string; version: number }
@@ -49,11 +54,17 @@ test(
   'MongoDB API: isolation, RBAC, CSRF, ledger writes, retries and revocation',
   { timeout: 900000 },
   async (t) => {
-    process.env.NODE_ENV = 'test'
+    Object.assign(process.env, { NODE_ENV: 'test' })
+    process.env.NOTIFY_PROVIDER = 'local-log'
+    delete process.env.NOTIFY_WEBHOOK_URL
     process.env.APP_ORIGIN = origin
     const replica = await MongoMemoryReplSet.create({
       replSet: { count: 1 },
-      binary: { version: '8.0.16' },
+      instanceOpts: [{ launchTimeout: 60000 }],
+      binary: {
+        version: '8.0.16',
+        downloadDir: resolve('.cache/mongodb-binaries'),
+      },
     })
     // Exercise the deployed DATABASE_URL contract using only the temporary DB.
     process.env.DATABASE_URL = replica.getUri()
@@ -419,6 +430,29 @@ test(
           )
         },
       )
+      await verifyCompletedWorkflows(
+        t,
+        call,
+        owner,
+        await register('workflow-other@example.test'),
+      )
+      await verifyOperationalWorkflows(t, call, owner)
+      await verifyStockAutomation(t, call, owner)
+      if (process.env.RUN_LIVE_BROWSER === 'true')
+        await t.test(
+          'signed-in browser workflows use the real Next.js API and temporary MongoDB',
+          async () => {
+            await register('browser@example.test')
+            const browserUser = await d.users.findOne({
+              email: 'browser@example.test',
+            })
+            await d.tenants.updateOne(
+              { _id: browserUser!.tenant },
+              { $set: { plan: 'business_pro' } },
+            )
+            await verifyLiveBrowser()
+          },
+        )
       await t.test(
         'logout and session revocation invalidate MongoDB sessions',
         async () => {
@@ -441,6 +475,7 @@ test(
             {
               env: {
                 ...process.env,
+                MONGODB_URI: process.env.DATABASE_URL,
                 NODE_ENV: 'production',
                 APP_ORIGIN: 'https://example.test',
                 COOKIE_SECURE: 'true',
@@ -474,6 +509,25 @@ test(
               true,
               'Next.js health endpoint did not become ready.',
             )
+            const protectedPut = await fetch(
+              'http://127.0.0.1:3317/api/v1/payments/upi/settings',
+              {
+                method: 'PUT',
+                headers: {
+                  Origin: 'https://example.test',
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  vpa: 'merchant@bank',
+                  name: 'Merchant',
+                }),
+              },
+            )
+            assert.equal(
+              protectedPut.status,
+              401,
+              'Production PUT route must reach authentication, not a framework 405.',
+            )
             for (const path of ['/', '/login', '/app/dashboard']) {
               const response = await fetch('http://127.0.0.1:3317' + path)
               assert.equal(
@@ -485,6 +539,11 @@ test(
                 response.headers.get('content-type') || '',
                 /text\/html/,
               )
+              assert.equal(
+                response.headers.get('x-content-type-options'),
+                'nosniff',
+              )
+              assert.equal(response.headers.get('x-frame-options'), 'DENY')
               assert.match(await response.text(), /BusinessOS/)
             }
           } finally {

@@ -12,7 +12,11 @@ import {
 } from './database'
 import { fail, publicUser } from './security'
 
-export function scopedState(state: State, role: UserRole): State {
+export function scopedState(
+  state: State,
+  role: UserRole,
+  employeeId?: string | null,
+): State {
   if (role === 'owner' || role === 'auditor') return state
   const empty: State = {
     ...state,
@@ -55,7 +59,12 @@ export function scopedState(state: State, role: UserRole): State {
     return { ...empty, invoices: state.invoices, leads: state.leads }
   if (role === 'department_manager')
     return { ...empty, projects: state.projects, tasks: state.tasks }
-  if (role === 'employee') return { ...empty, tasks: state.tasks }
+  if (role === 'employee')
+    return {
+      ...empty,
+      tasks: state.tasks,
+      employees: state.employees.filter((e) => e.id === employeeId),
+    }
   return empty
 }
 export function initialState(organisation: string, sample: boolean) {
@@ -191,7 +200,7 @@ export async function snapshot(
   if (!plan) fail(503, 'Database setup is pending. Run npm run db:migrate.')
   return {
     version: doc.version,
-    state: scopedState(doc.state, account.role),
+    state: scopedState(doc.state, account.role, account.employeeId),
     user: publicUser(account),
     csrf: session.csrf,
     entitlements: {

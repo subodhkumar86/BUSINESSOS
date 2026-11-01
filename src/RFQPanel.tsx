@@ -1,5 +1,7 @@
+import { formatMoney } from './currency'
 import { useEffect, useState } from 'react'
 import { request } from './api'
+import { demoRfqs } from './demo-data'
 import type { Snapshot } from './types'
 
 interface RFQ {
@@ -20,11 +22,11 @@ const statusColors: Record<string, string> = {
 }
 
 export function RFQPanel({ remote }: { remote: Snapshot | null }) {
-  const [rfqs, setRfqs] = useState<RFQ[]>([])
+  const [rfqs, setRfqs] = useState<RFQ[]>(() => remote ? [] : demoRfqs)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const readOnly = remote?.user.role === 'auditor'
+  const readOnly = !remote || remote.user.role === 'auditor'
 
   useEffect(() => {
     if (!remote) return
@@ -32,10 +34,10 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
   }, [remote])
 
   const money = (v: number | null) =>
-    v == null ? '—' : new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 }).format(v)
+    v == null ? '—' : formatMoney(v, remote?.state.currency || 'INR')
 
   const nextStatus = (s: RFQ['status']): RFQ['status'] | null => {
-    const map: Partial<Record<RFQ['status'], RFQ['status']>> = { sent: 'quoted', quoted: 'accepted' }
+    const map: Partial<Record<RFQ['status'], RFQ['status']>> = { quoted: 'accepted' }
     return map[s] || null
   }
 
@@ -95,7 +97,7 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
                       disabled={busy}
                       onClick={async () => {
                         if (!remote) return
-                        const amt = prompt('Enter quoted amount (NGN):')
+                        const amt = prompt(`Enter quoted amount (${remote?.state.currency || 'INR'}):`)
                         if (!amt || isNaN(Number(amt))) return
                         setBusy(true)
                         try {
@@ -143,7 +145,7 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
               })
               setRfqs((prev) => [created, ...prev])
               form.reset()
-              setNotice('RFQ created and sent.')
+              setNotice('RFQ recorded. Send the request to your supplier separately.')
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Could not create RFQ.')
             } finally {
@@ -156,7 +158,7 @@ export function RFQPanel({ remote }: { remote: Snapshot | null }) {
           <label>Quantity<input name="quantity" type="number" min="1" placeholder="0" required /></label>
           <label>Required by<input name="requiredBy" type="date" /></label>
           <label>Notes<input name="notes" placeholder="Specifications or terms" /></label>
-          <button className="primary" disabled={busy}>+ Send RFQ</button>
+          <button className="primary" disabled={busy}>+ Create RFQ</button>
         </form>
       )}
     </section>

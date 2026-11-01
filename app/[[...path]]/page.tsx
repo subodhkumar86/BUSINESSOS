@@ -1,5 +1,4 @@
-import WorkspaceClient from '../workspace-client'
-
 export default function Page() {
-  return <WorkspaceClient />
+  // The root layout owns workspace state across catch-all route changes.
+  return null
 }

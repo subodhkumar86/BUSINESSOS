@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { seed, transition, metrics } from '../src/domain.ts'
+import { formatMoney } from '../src/currency.ts'
+
+test('new workspaces use INR and money uses Indian grouping without losing paise', () => {
+  assert.equal(seed().currency, 'INR')
+  assert.equal(formatMoney(125000.75), '₹1,25,000.75')
+  assert.equal(formatMoney(-1234567.5), '-₹12,34,567.5')
+  assert.match(formatMoney(125000, 'USD'), /1,25,000/)
+})
 const create = (s, collection, data) =>
   transition(s, { type: 'create', collection, data })
 const status = (s, collection, id, value) =>

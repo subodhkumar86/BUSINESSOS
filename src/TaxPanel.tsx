@@ -1,3 +1,4 @@
+import { formatMoney } from './currency'
 import { useEffect, useState } from 'react'
 import { request } from './api'
 import type { Snapshot } from './types'
@@ -34,7 +35,7 @@ interface StatutorySettings {
   compliance_notes: string
 }
 const defaultSettings: StatutorySettings = {
-  country_code: 'NG', jurisdiction: 'Nigeria', currency: 'NGN', financial_year_start_month: 1,
+  country_code: 'NG', jurisdiction: 'Nigeria', currency: 'INR', financial_year_start_month: 1,
   vat_rate: 0.075, withholding_rate: 0.05, income_tax_rate: 0.3,
   payroll_employee_rate: 0, payroll_employer_rate: 0, invoice_prefix: 'INV',
   tax_inclusive: false, compliance_notes: '',
@@ -227,7 +228,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
 
   return (
     <div className="module-panel tax-panel">
-      {/* Telemetry Row */}
+      <p className="notice">Amounts use the configured currency. Existing VAT/WHT/CIT and payroll calculation models remain jurisdiction-specific; choosing INR does not configure Indian GST or income tax rules.</p>
       <div className="stats-row">
         <div className="stat-card">
           <span className="stat-label">Tax Territory</span>
@@ -237,7 +238,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
         <div className="stat-card">
           <span className="stat-label">Pending Filings</span>
           <b className="stat-value" style={{ color: '#b45309' }}>
-            ₦{pendingTotal.toLocaleString()}
+            {formatMoney(pendingTotal, settings.currency)}
           </b>
           <small>{filings.filter((f) => f.status !== 'paid').length} returns due</small>
         </div>
@@ -284,7 +285,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
           </div>
           <div className="operations-fields">
             <label>
-              Supply Amount (₦)
+              Supply Amount ({settings.currency})
               <input
                 type="number"
                 min="0"
@@ -305,15 +306,15 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
           <div className="telemetry-list" style={{ marginTop: '12px' }}>
             <div className="telemetry-item">
               <span>Net Base Amount</span>
-              <b>₦{vatCalc.baseAmount.toLocaleString()}</b>
+              <b>{formatMoney(vatCalc.baseAmount, settings.currency)}</b>
             </div>
             <div className="telemetry-item">
               <span>VAT at {(settings.vat_rate * 100).toFixed(2)}%</span>
-              <b style={{ color: '#2563eb' }}>₦{vatCalc.vatAmount.toLocaleString()}</b>
+              <b style={{ color: '#2563eb' }}>{formatMoney(vatCalc.vatAmount, settings.currency)}</b>
             </div>
             <div className="telemetry-item">
               <span>Gross Total Amount</span>
-              <b style={{ color: '#16a34a' }}>₦{vatCalc.totalAmount.toLocaleString()}</b>
+              <b style={{ color: '#16a34a' }}>{formatMoney(vatCalc.totalAmount, settings.currency)}</b>
             </div>
           </div>
         </section>
@@ -325,7 +326,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
           </div>
           <div className="operations-fields">
             <label>
-              Gross Invoice Amount (₦)
+              Gross Invoice Amount ({settings.currency})
               <input
                 type="number"
                 min="0"
@@ -352,11 +353,11 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
           <div className="telemetry-list" style={{ marginTop: '12px' }}>
             <div className="telemetry-item">
               <span>WHT Deducted ({whtCalc.whtRate * 100}%)</span>
-              <b style={{ color: '#dc2626' }}>-₦{whtCalc.whtDeducted.toLocaleString()}</b>
+              <b style={{ color: '#dc2626' }}>-{formatMoney(whtCalc.whtDeducted, settings.currency)}</b>
             </div>
             <div className="telemetry-item">
               <span>Net Disbursement to Vendor</span>
-              <b style={{ color: '#16a34a' }}>₦{whtCalc.netPayable.toLocaleString()}</b>
+              <b style={{ color: '#16a34a' }}>{formatMoney(whtCalc.netPayable, settings.currency)}</b>
             </div>
           </div>
         </section>
@@ -370,7 +371,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
           <label>
-            Annual Turnover (₦)
+            Annual Turnover ({settings.currency})
             <input
               type="number"
               min="0"
@@ -380,7 +381,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
             />
           </label>
           <label>
-            Estimated Taxable Profit (₦)
+            Estimated Taxable Profit ({settings.currency})
             <input
               type="number"
               min="0"
@@ -396,7 +397,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
           <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Estimated CIT Liability:</span>
             <b style={{ fontSize: '18px', color: citCalc.citPayable === 0 ? '#16a34a' : '#b45309' }}>
-              ₦{citCalc.citPayable.toLocaleString()}
+              {formatMoney(citCalc.citPayable, settings.currency)}
             </b>
           </div>
         </div>
@@ -430,7 +431,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
                     <td><b>{f.name}</b></td>
                     <td>{f.territory}</td>
                     <td>{new Date(f.due_date).toLocaleDateString()}</td>
-                    <td>₦{f.amount.toLocaleString()}</td>
+                    <td>{formatMoney(f.amount, settings.currency)}</td>
                     <td>
                       <span className={f.status === 'paid' ? 'badge green' : f.status === 'overdue' ? 'badge red' : 'badge'}>
                         {f.status.toUpperCase()}
@@ -477,7 +478,7 @@ export function TaxPanel({ remote }: { remote: Snapshot | null }) {
               type="number"
               min="0"
               step="0.01"
-              placeholder="Estimated Amount (₦)"
+              placeholder={`Estimated Amount (${settings.currency})`}
               required
             />
             <button className="primary" disabled={busy} type="submit">

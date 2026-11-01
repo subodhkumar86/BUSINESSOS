@@ -24,6 +24,7 @@ export const publicUser = (user: AccountDocument) => ({
   name: user.name,
   email: user.email,
   role: user.role,
+  employeeId: user.employeeId || null,
 })
 export async function hashPassword(value: string) {
   const salt = randomBytes(16).toString('hex')

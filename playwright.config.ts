@@ -7,11 +7,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  webServer: process.env.E2E_BASE_URL ? undefined : {
-    command: 'node node_modules/next/dist/bin/next dev -p 5178 --hostname 127.0.0.1',
-    url: 'http://127.0.0.1:5178/login',
-    reuseExistingServer: !process.env.CI,
-  },
+  webServer: process.env.E2E_BASE_URL
+    ? undefined
+    : {
+        command:
+          'node node_modules/next/dist/bin/next dev --webpack -p 5178 --hostname 127.0.0.1',
+        timeout: 120000,
+        url: 'http://127.0.0.1:5178/login',
+        reuseExistingServer: !process.env.CI,
+      },
   reporter: process.env.CI ? 'github' : 'list',
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:5178',

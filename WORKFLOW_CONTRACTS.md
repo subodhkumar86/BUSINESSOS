@@ -5,9 +5,9 @@ Scope: PRD sections 7.1, 10, 12, 18 and 25. No external messages or payments are
 Routes: GET/POST /api/v1/workflows/:kind; PATCH /api/v1/workflows/:kind/:id.
 Kinds: leave, goals, reviews, appointments, certifications, findings, knowledge.
 
-All routes require a current authenticated session; mutations require CSRF. Tenant row-level security, strict schemas, server-side role checks, plan checks, row locking, optimistic versions and transactional audits apply. Creation retries require an idempotency key; the same key with different input is rejected.
+All routes require a current authenticated session; mutations require CSRF. Tenant-scoped queries, strict schemas, server-side role checks, plan checks, MongoDB transactions, optimistic versions and transactional audits apply. Creation retries require an idempotency key; the same key with different input is rejected.
 
-- Leave: owner/HR/employee manage requests for existing tenant employees; auditors read. Start/end dates must be valid and ordered. Pending requests can be approved or rejected. Overlapping pending/approved leave for one employee is rejected. Self-approval is forbidden. No automatic payroll deduction. **Employee self-service**: employees can create and update leave requests only for their own employee record (matched by name). Approval by a different HR user or owner is still required.
+- Leave: owner/HR/employee manage requests for existing tenant employees; auditors read. Start/end dates must be valid and ordered. Pending requests can be approved or rejected. Overlapping pending/approved leave for one employee is rejected. Self-approval is forbidden. No automatic payroll deduction. **Employee self-service**: employees can submit requests only for the employee record explicitly linked to their account. Approval by a different HR user or owner is required; employee accounts cannot approve or reject leave.
 - Goals: owner/HR/employee define an existing employee's measurable goal and deadline; track progress; close only when target is reached. Auditors read. **Employee self-service**: employees can create and update progress on goals only for their own employee record.
 - Reviews: owner/HR create a dated performance evaluation for an existing employee with a 1–5 rating, evidence-based summary and optional NGN reward amount/note. Auditors read. Reviews progress from scheduled to in review and then completed (or cancelled); they do not create a payroll payment or journal entry.
 - Appointments: owner/sales create scheduled bookings with guest, host, room and explicit timestamps. Overlapping active room bookings are rejected. Complete or cancel once; no automatic external reminders.
@@ -15,7 +15,7 @@ All routes require a current authenticated session; mutations require CSRF. Tena
 - Findings: owner/operations create audit findings, corrective actions and due dates. Closure requires resolution evidence. Audit/HR/finance may read.
 - Knowledge: owner/sales draft and publish support articles. Other tenant users read published articles; auditors may inspect drafts. Archived articles are not served to ordinary readers. External customer authentication remains separate work.
 
-Evidence: unit tests for validation/transitions and PostgreSQL integration tests for isolation, permissions, conflicts, retry behavior and auditing. UI provides labelled fields, status filters, search, loading, errors, success and empty states.
+Evidence: unit tests for validation/transitions and active MongoDB integration tests for isolation, permissions, conflicts, retry behavior and auditing. UI provides labelled fields, status filters, search, loading, errors, success and empty states.
 
 ## Integrated warehouse shipments
 
@@ -54,6 +54,6 @@ Set `personalRelief` when creating or updating an employee record. The value is 
 
 PRD: section 12 (HR), section 5 (RBAC).
 
-Employees can submit leave requests and create/update progress on their own performance goals via the HR page. The server matches the employee record by name against the authenticated user's display name. If no matching employee record exists, the request is rejected with a 403 and a message directing the user to their HR administrator.
+Employees can submit leave requests and create/update progress on their own performance goals via the HR page. The owner links each account to its employee record in Team access. Names are not used to infer identity. If a link is missing, the API rejects self-service with a 403 and asks the user to contact the workspace owner. Linking changes revoke existing sessions. Employee HR pages exclude recruitment, reviews and management payroll panels.
 
 Employees cannot approve their own leave (separation-of-duties check unchanged), cannot write appointments, certifications, findings or knowledge, and cannot view other employees' leave or goal records beyond what the scoped workspace snapshot exposes.

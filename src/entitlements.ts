@@ -2,6 +2,13 @@ export interface Entitlements {
   plan: string
   features: string[]
   seatLimit: number
+  activeSeats?: number
+  availablePlans?: {
+    id: string
+    price?: string
+    seatLimit: number
+    features: string[]
+  }[]
 }
 
 export function pageFeature(page: string): string | undefined {

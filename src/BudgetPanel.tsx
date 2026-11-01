@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { formatMoney } from './currency'
+import { useEffect, useRef, useState } from 'react'
 import { request } from './api'
+import { demoBudgets } from './demo-data'
 import type { Snapshot } from './types'
 
 interface Budget {
@@ -14,12 +16,13 @@ interface Budget {
   version: number
 }
 
-export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
-  const [budgets, setBudgets] = useState<Budget[]>([])
+export function BudgetPanel({ remote, onRefresh }: { remote: Snapshot | null; onRefresh?: () => Promise<void> }) {
+  const pendingExpense = useRef<{ body: string; id: string; key: string } | null>(null)
+  const [budgets, setBudgets] = useState<Budget[]>(() => remote ? [] : demoBudgets)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const readOnly = remote?.user.role === 'auditor'
+  const readOnly = !remote || remote.user.role === 'auditor'
 
   useEffect(() => {
     if (!remote) return
@@ -27,7 +30,7 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
   }, [remote])
 
   const money = (v: number) =>
-    new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 }).format(v)
+    formatMoney(v, remote?.state.currency || 'INR')
 
   const variance = (b: Budget) => b.total_amount - b.spent_amount
   const pct = (b: Budget) => b.total_amount > 0 ? Math.min(100, Math.round((b.spent_amount / b.total_amount) * 100)) : 0
@@ -83,6 +86,18 @@ export function BudgetPanel({ remote }: { remote: Snapshot | null }) {
                       }}
                     >Close</button>
                   )}
+                  {!readOnly && remote && b.status === 'active' && <details><summary>Post budget expense</summary><form onSubmit={async event => {
+                    event.preventDefault(); if (busy) return
+                    const form = event.currentTarget, values = new FormData(form), body = JSON.stringify({ version: b.version, description: values.get('description'), amount: Number(values.get('amount')) })
+                    if (pendingExpense.current?.body !== body || pendingExpense.current.id !== b.id) pendingExpense.current = { body, id: b.id, key: crypto.randomUUID() }
+                    setBusy(true); setError(''); setNotice('')
+                    try {
+                      const updated = await request<Budget>('/budgets/' + b.id + '/expenses', { method: 'POST', headers: { 'X-CSRF-Token': remote.csrf, 'Idempotency-Key': pendingExpense.current.key }, body })
+                      pendingExpense.current = null; setBudgets(rows => rows.map(row => row.id === b.id ? updated : row)); form.reset(); setNotice('Budget expense and cash journal posted.')
+                      try { await onRefresh?.() } catch { setError('Expense saved. Refresh the workspace before posting further changes.') }
+                    } catch (error) { setError(error instanceof Error ? error.message : 'Could not post expense.') }
+                    finally { setBusy(false) }
+                  }}><label>Description<input name="description" required maxLength={160} /></label><label>Expense amount<input name="amount" type="number" min="0.01" step="0.01" required /></label><button disabled={busy}>Post expense</button></form></details>}
                 </td>
               </tr>
             ))}

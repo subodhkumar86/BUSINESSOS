@@ -27,8 +27,16 @@
     "src",
     "server/mongo",
     "scripts/mongo-setup.ts",
+    "scripts/provision-super-admin.ts",
+    "scripts/deliver-outbox.ts",
+    "scripts/run-automation.ts",
+    "tests/mongo*.ts",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    ".cache/next-live/types/**/*.ts",
+    ".cache/next-live/dev/types/**/*.ts",
+    ".cache/next-demo/types/**/*.ts",
+    ".cache/next-demo/dev/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

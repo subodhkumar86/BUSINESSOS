@@ -316,7 +316,7 @@ export function Customers({ remote }: { remote: Snapshot | null }) {
               {history.map((item) => (
                 <li key={item.id} className="card !p-4">
                   <strong>{item.kind}</strong> ·{' '}
-                  <span className="muted">{new Date(item.occurred_at).toLocaleString()} · {item.actor}</span>
+                  <span className="muted">{new Date(item.occurred_at).toLocaleString('en-IN')} · {item.actor}</span>
                   <p className="mt-2 text-sm">{item.summary}</p>
                   {item.follow_up_on && (
                     <p className="mt-2 text-xs font-semibold text-brand-700">Follow up: {item.follow_up_on.slice(0, 10)}</p>

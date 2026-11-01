@@ -57,8 +57,8 @@ export const operations: Record<string, Contract> = {
     fields: [
       ['batchNumber', 'Batch number', 'text'],
       ['productName', 'Product name', 'text'],
-      ['outputProductId', 'Finished-good product ID (optional)', 'text'],
-      ['materials', 'Materials JSON', 'text'],
+      ['outputProductId', 'Finished-good product (optional)', 'text'],
+      ['materials', 'Batch materials', 'text'],
       ['plannedQty', 'Planned quantity', 'number'],
     ],
     columns: [
